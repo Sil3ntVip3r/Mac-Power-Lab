@@ -22,7 +22,7 @@ jobs:
         run: |
           set -euo pipefail
           cat bootstrap/source.part-* | base64 --decode > /tmp/mac-power-lab-source.tar.gz
-          echo "907d00a3e602dc449bf887f939d529ea2e451171bc226a4112ecc242ecae09a7  /tmp/mac-power-lab-source.tar.gz" | sha256sum --check --strict
+          echo "7a8112d806e987239e4ca06140759731744e00173faa29974c0d2c1db56c7fc5  /tmp/mac-power-lab-source.tar.gz" | sha256sum --check --strict
       - name: Replace bootstrap files with the source tree
         shell: bash
         run: |
