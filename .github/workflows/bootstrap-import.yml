@@ -1,6 +1,7 @@
 name: Bootstrap source import
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - codex/initial-import-v1.4.0
