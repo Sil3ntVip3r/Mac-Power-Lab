@@ -1,0 +1,38 @@
+name: Bootstrap source import
+
+on:
+  push:
+    branches:
+      - codex/initial-import-v1.4.0
+    paths:
+      - .bootstrap/READY
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reconstruct verified source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .bootstrap/source.part-* | base64 --decode > /tmp/mac-power-lab-source.tar.gz
+          echo "e30cbe39a598495a5cc1e933565fe0ebbd26a76268cb7d29acb679ea794df6c3  /tmp/mac-power-lab-source.tar.gz" | sha256sum --check --strict
+
+      - name: Replace bootstrap files with source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          tar -xzf /tmp/mac-power-lab-source.tar.gz -C .
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: import Mac Power Lab v1.4.0"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
