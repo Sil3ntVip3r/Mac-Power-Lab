@@ -78,3 +78,51 @@ func TestExpandedModelsExposeBatteryAndAdapterFields(t *testing.T) {
 		}
 	}
 }
+
+func TestReportGenerationUXIsVisibleAndActionable(t *testing.T) {
+	model := readSwiftUIFile(t, "AppModel.swift")
+	content := readSwiftUIFile(t, "ContentView.swift")
+	client := readSwiftUIFile(t, "APIClient.swift")
+
+	for _, required := range []string{
+		"isGeneratingReport",
+		"latestReportURL",
+		"report.html",
+		"NSWorkspace.shared.open",
+		"activateFileViewerSelecting",
+		"guard !isGeneratingReport else { return }",
+	} {
+		if !strings.Contains(model, required) {
+			t.Fatalf("AppModel missing report UX behavior %q", required)
+		}
+	}
+
+	for _, required := range []string{
+		"Generating…",
+		"Open Latest Report",
+		"Show Report in Finder",
+		"model.reportMessage",
+	} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("ContentView missing visible report control %q", required)
+		}
+	}
+
+	if !strings.Contains(client, "timeout: 120") {
+		t.Fatal("report generation must use the extended request timeout")
+	}
+}
+
+func TestApplicationPowerDistinguishesZeroFromUnavailable(t *testing.T) {
+	apps := readSwiftUIFile(t, "ApplicationsView.swift")
+	for _, required := range []string{
+		"attributedWatts",
+		"value ?? 0",
+		"0.00 W is a valid zero allocation",
+		"n/a means attribution is unavailable",
+	} {
+		if !strings.Contains(apps, required) {
+			t.Fatalf("ApplicationsView missing zero-attribution behavior %q", required)
+		}
+	}
+}
