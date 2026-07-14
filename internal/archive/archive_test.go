@@ -86,12 +86,22 @@ func TestOpenExpectedRegularRejectsPathReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// Create the replacement while the original still exists. This guarantees
+	// the two files have distinct filesystem identities. Deleting and then
+	// recreating the same pathname can legally reuse the original inode on
+	// Linux, which made this identity-check regression test nondeterministic.
+	replacement := filepath.Join(base, "replacement")
+	if err := os.WriteFile(replacement, []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte("replacement"), 0o600); err != nil {
+	if err := os.Rename(replacement, path); err != nil {
 		t.Fatal(err)
 	}
+
 	if file, _, err := openExpectedRegular(path, expected); err == nil {
 		_ = file.Close()
 		t.Fatal("expected identity mismatch")
