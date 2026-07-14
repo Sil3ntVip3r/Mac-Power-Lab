@@ -1,11 +1,29 @@
+import AppKit
 import Foundation
 import SwiftUI
+
+private enum ReportPresentationError: LocalizedError {
+    case sessionDirectoryUnavailable
+    case artifactMissing(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .sessionDirectoryUnavailable:
+            return "The report was generated, but the session directory was not returned by the backend."
+        case .artifactMissing(let path):
+            return "The backend completed report generation, but report.html was not found at \(path)."
+        }
+    }
+}
 
 @MainActor
 final class AppModel: ObservableObject {
     @Published var status: EngineStatus?
     @Published var isConnecting = false
     @Published var errorMessage: String?
+    @Published private(set) var isGeneratingReport = false
+    @Published private(set) var reportMessage: String?
+    @Published private(set) var latestReportURL: URL?
 
     @Published var benchmarkCatalog: [BenchmarkDefinition] = BenchmarkDefinition.fallbackCatalog
     @Published var selectedBenchmark = "quick"
@@ -140,13 +158,61 @@ final class AppModel: ObservableObject {
     }
 
     func generateReport() {
+        guard !isGeneratingReport else { return }
+        isGeneratingReport = true
+        errorMessage = nil
+        reportMessage = nil
+
         Task {
+            defer { isGeneratingReport = false }
             do {
-                status = try await api.generateReport()
+                let updatedStatus = try await api.generateReport()
+                guard let directory = updatedStatus.session?.dataDirectory else {
+                    throw ReportPresentationError.sessionDirectoryUnavailable
+                }
+
+                let reportURL = URL(
+                    fileURLWithPath: directory,
+                    isDirectory: true
+                )
+                .appendingPathComponent("report.html", isDirectory: false)
+
+                guard FileManager.default.fileExists(atPath: reportURL.path) else {
+                    throw ReportPresentationError.artifactMissing(reportURL.path)
+                }
+
+                status = updatedStatus
+                latestReportURL = reportURL
+                reportMessage = "Report generated: \(reportURL.path)"
+
+                // The backend has always generated the report correctly; the old
+                // UI discarded the successful result. Open the artifact immediately
+                // so the toolbar action has visible behavior.
+                if !NSWorkspace.shared.open(reportURL) {
+                    NSWorkspace.shared.activateFileViewerSelecting([reportURL])
+                    reportMessage = "Report generated and revealed in Finder: \(reportURL.path)"
+                }
             } catch {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+
+    func openLatestReport() {
+        guard let latestReportURL else { return }
+        errorMessage = nil
+        if !NSWorkspace.shared.open(latestReportURL) {
+            errorMessage = "The report exists but macOS could not open it: \(latestReportURL.path)"
+        }
+    }
+
+    func revealLatestReport() {
+        guard let latestReportURL else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([latestReportURL])
+    }
+
+    func dismissReportMessage() {
+        reportMessage = nil
     }
 
     private func startPolling() {
