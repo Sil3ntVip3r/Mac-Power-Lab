@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  source-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Validate
+        run: |
+          test -z "$(gofmt -l cmd internal)"
+          go test -count=1 -timeout=90s ./...
+          go vet ./...
+      - name: Build command-line binaries
+        run: |
+          mkdir -p release
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags '-s -w' -o release/macpowerlab-darwin-arm64 ./cmd/macpowerlab
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags '-s -w' -o release/macpowerlab-darwin-amd64 ./cmd/macpowerlab
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags '-s -w' -o release/macpowerlab-linux-amd64 ./cmd/macpowerlab
+          sha256sum release/* > release/SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release/*

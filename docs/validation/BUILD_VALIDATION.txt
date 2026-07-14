@@ -1,0 +1,29 @@
+MacPowerLab v1.0.1 Build Validation
+===================================
+
+Validation environment:
+- Go 1.23.2 linux/amd64
+- Swift 6.2.1 parser
+
+Completed:
+- gofmt check: PASS
+- go vet ./...: PASS
+- go test ./...: PASS
+- go test -race ./...: PASS
+- SwiftUI source syntax parse: PASS
+- Linux amd64 production build: PASS
+- Darwin arm64 cross-build: PASS
+- Darwin amd64 cross-build: PASS
+- Offline XML plist parser smoke test: PASS
+- Offline powermetrics plist conversion smoke test: PASS
+- JSON Schema manifest tests: PASS
+- Token-authenticated loopback API test: PASS
+- Streaming store/report test: PASS
+- Maximum-compression archive test: PASS
+
+Platform-required validation still performed by scripts/validate_on_mac.sh:
+- Live AppleSmartBattery collection
+- Live powermetrics stream
+- Legacy parity with real sensors
+- C/Metal workload compilation and execution
+- SwiftUI/AppKit linking and ad-hoc app signing

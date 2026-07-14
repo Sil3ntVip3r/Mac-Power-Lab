@@ -1,0 +1,1047 @@
+MacPowerLab v0.8.6
+====================
+
+Reporting-focused upgrade for the MacBook power monitor and stress-test suite.
+
+NO SSD STRESS TESTS ARE INCLUDED.
+
+Main additions in v0.4.0:
+- Automatic self-contained HTML report generator
+- Charger/cable scorecard
+- Charger verdict: keeps up / not keeping up / partial
+- Battery health report
+- Charge curve analysis by battery percentage band
+- Event timeline with plain-English explanations
+- Port-controller warning checks
+- External watt-meter readings
+- Test metadata capture for charger/cable/port comparisons
+- Compare multiple logs
+- Long-term history database
+- Monitor version bumped to v0.11.0
+
+FIRST TIME SETUP
+----------------
+
+  cd ~/Downloads/MacPowerLab_v0.4.0
+  chmod +x *.sh *.py
+  ./build_tools.sh
+
+BEST MAX POWER TEST
+-------------------
+
+Terminal 1:
+
+  cd ~/Downloads/MacPowerLab_v0.4.0
+  ./run_power_monitor_powermetrics.sh
+
+Terminal 2:
+
+  cd ~/Downloads/MacPowerLab_v0.4.0
+  ./run_max_power_test.sh 300
+
+After the test:
+
+  ./generate_report.sh
+  ./open_latest_report.sh
+
+CHARGER / CABLE COMPARISON WORKFLOW
+-----------------------------------
+
+Terminal 1:
+
+  cd ~/Downloads/MacPowerLab_v0.4.0
+  ./run_charger_compare.sh
+
+Terminal 2:
+
+  cd ~/Downloads/MacPowerLab_v0.4.0
+  ./run_max_power_test.sh 300
+
+After the test:
+
+  ./generate_report.sh
+  ./open_latest_report.sh
+
+EXTERNAL WATT METER
+-------------------
+
+  ./add_wall_reading.sh 136 "max load plugged in"
+
+REPORTING
+---------
+
+  ./generate_report.sh
+  ./open_latest_report.sh
+  ./compare_logs.sh
+  ./history.sh
+
+
+v0.4.1 DASHBOARD INTERPRETATION PATCH
+-------------------------------------
+
+This patch improves live dashboard interpretation:
+
+- Charger load/headroom now uses BMS SystemPower first.
+- Visible charger load now includes BMS SystemPower + positive battery charge watts.
+- Charger load percent is shown live.
+- Live charger verdict added:
+  - Keeping up
+  - Keeping up, near limit
+  - At/near limit
+  - Not keeping up — battery draining on AC
+- PowerTelemetry load/battery estimates moved out of the main dashboard and kept as secondary/full/debug values.
+- BMS virtual temp/model moved out of the main dashboard and shown only in --full as a model value.
+- Added current-phase watt stats:
+  - current phase average
+  - current phase charge peak
+  - current phase discharge peak
+- Session-wide charge/discharge peaks remain separate.
+- Health label changed to Live health estimate.
+- Stable health estimate added from AC/light-load samples only.
+- HTML report now includes charger load percent, visible charger load, and minimum charger headroom.
+
+
+v0.4.2 LOG-REVIEW PATCH
+-----------------------
+
+Based on the 20260606_184404 log review:
+- Adapter voltage now reads AdapterVoltage correctly, so 28 V / 4.99 A / ~139.7 W can display.
+- CSV now includes BatteryCellDisconnectCount.
+- Report generator now outputs v0.4.2 reports.
+- Charger scorecard now uses the best/max active PortControllerMaxPower instead of the first inactive 0 W entry.
+- DeadBatteryBootData.DeviceResetCount is no longer treated as a cable/charger warning.
+- Charger verdict now distinguishes Good from Good, near limit.
+- Battery report prefers Stable health estimate when available.
+
+
+v0.4.3 LOG EXPORT PATCH
+-----------------------
+
+Pack all logs for sending/uploading:
+
+  ./pack_logs.sh
+
+Output:
+
+  exports/mac_power_logs_all_YYYYMMDD_HHMMSS.tar.xz
+
+Pack only the latest run:
+
+  ./pack_latest_logs.sh
+
+Fallback gzip archive if needed:
+
+  ./pack_logs_gz.sh
+
+The default packer uses Python lzma/xz preset 9 + extreme compression.
+It also writes a MANIFEST_macpowerlab_logs.json inside the tar archive showing what was included.
+
+
+v0.5.0 macOS 27 COMPATIBILITY UPGRADE
+-------------------------------------
+
+Built after reviewing the macOS 27 log bundle.
+
+New:
+
+  ./run_macos_sensor_scan.sh
+
+This captures:
+- sw_vers
+- uname
+- sysctl
+- pmset battery/custom/capabilities
+- system_profiler SPPowerDataType text and JSON
+- AppleSmartBattery plist/raw ioreg
+- powermetrics raw sample
+- macOS sensor compatibility report
+- max-compressed tar.xz archive ready to upload/send
+
+Reports written to:
+
+  logs/macos_sensor_scan_YYYYMMDD_HHMMSS/macos_sensor_report.txt
+  logs/macos_sensor_scan_YYYYMMDD_HHMMSS/macos_sensor_report.json
+  logs/macos_sensor_scan_YYYYMMDD_HHMMSS/macos_sensor_report.html
+  logs/macos_sensor_scan_YYYYMMDD_HHMMSS/apple_smart_battery_keys.json
+
+Also new:
+
+  ./run_post_upgrade_baseline.sh
+
+This guides a post-upgrade AC/battery/max-load baseline test.
+
+Monitor changes:
+- Monitor version bumped to v0.11.0.
+- System Information parser now uses JSON first.
+- Adds Low Power Mode / High Power Mode fields from macOS 27.
+- Adds power-mode warning when Low Power Mode is active on AC or Battery.
+- Adds charger name/connected fields from System Information.
+
+Important:
+macOS 27 can report LowPowerMode=Yes even when High Power is selected. v0.5.1 treats HighPowerMode=Yes as the active winner and only warns when the derived active mode is Low Power.
+
+
+v0.5.1 ENERGY MODE INTERPRETATION FIX
+-------------------------------------
+
+This patch fixes the macOS 27 Energy Mode interpretation.
+
+Your Battery settings screenshot shows:
+- On battery: High Power
+- On power adapter: High Power
+
+But system_profiler may still expose LowPowerMode=Yes at the same time.
+v0.5.1 now derives the active mode this way:
+
+1. If HighPowerMode=Yes, show High Power and do not warn.
+2. Else if LowPowerMode=Yes, show Low Power and warn.
+3. Else show Normal / Automatic.
+
+The raw System Information fields are still shown in --full for debugging.
+
+
+v0.5.2 ENERGY MODE FALSE-POSITIVE FIX
+-------------------------------------
+
+macOS 27 may report raw LowPowerMode=Yes even when the Battery settings screen
+shows High Power.
+
+v0.5.2 changes the warning logic:
+
+- HighPowerMode=Yes -> High Power, no warning.
+- LowPowerMode=Yes + HighPowerMode explicitly No/False/Off -> Low Power warning.
+- LowPowerMode=Yes + HighPowerMode missing/unknown -> Unknown / raw LowPowerMode=Yes, no warning.
+
+This prevents the main dashboard from showing a false Low Power Mode warning when
+the user-facing macOS Battery settings are set to High Power.
+
+
+v0.6.0 USER-FRIENDLY TEST UI + SYSTEM MONITOR EXPANSION
+-------------------------------------------------------
+
+New friendly test UI:
+- progress bar
+- elapsed timer
+- remaining timer
+- clean terminal display
+- stress-test output captured to logs/friendly_*.log
+
+Run the menu:
+
+  ./run_pretty_test_menu.sh
+
+Pretty max-power test:
+
+  ./run_max_power_test_pretty.sh 300
+
+Pretty extreme test:
+
+  ./run_max_power_extreme_pretty.sh 300
+
+Pretty CPU/GPU/memory tests:
+
+  ./run_cpu_stress_pretty.sh 300
+  ./run_gpu_stress_pretty.sh 300 high
+  ./run_memory_stress_pretty.sh 300
+
+New system sensor snapshot:
+
+  ./run_system_sensor_snapshot.sh
+
+This captures:
+- sw_vers
+- uptime
+- vm_stat
+- disk free space
+- top processes
+- pmset battery/thermal logs
+- system_profiler hardware/memory/power JSON
+- AppleSmartBattery plist
+- powermetrics smc/cpu_power/gpu_power/thermal/raw samples
+
+Reports:
+  logs/system_sensor_snapshot_YYYYMMDD_HHMMSS/system_health_report.txt
+  logs/system_sensor_snapshot_YYYYMMDD_HHMMSS/system_health_report.html
+  logs/system_sensor_snapshot_YYYYMMDD_HHMMSS/system_health_report.json
+
+Roadmap:
+  SENSOR_ROADMAP.md
+
+Main focus remains power monitoring, but v0.6.0 starts building the foundation
+for a power-first full system monitor.
+
+
+v0.6.1 USER FLOW + TEST LOGGING PATCH
+-------------------------------------
+
+Fixes:
+- Pretty max-power tests no longer wait for the old "Press Enter to start" prompt.
+- Friendly Test UI now sets MACPOWERLAB_AUTO_START=1 for child test scripts.
+- Child test stdin is closed so accidental prompts cannot block the pretty UI.
+
+New test logging:
+- Every pretty test writes a clean console log:
+    logs/friendly_*.log
+- Every pretty test writes a structured JSON record:
+    logs/test_runs/YYYYMMDD_HHMMSS_Test_Name.json
+- Every pretty test appends to:
+    logs/test_runs.jsonl
+- Test records include:
+    test ID, title, phase, requested duration, command, metadata,
+    start/end time, elapsed seconds, exit code, output log path,
+    nearest power-monitor CSV log.
+
+New menu flow:
+- ./run_pretty_test_menu.sh now asks how long to run each selected test.
+- After a test, it offers to generate/open the report and pack logs.
+
+New commands:
+  ./list_test_runs.sh
+  ./run_deep_sensor_probe.sh
+
+New reference notes:
+  APPLE_OPEN_SOURCE_NOTES.md
+
+
+v0.6.2 TEST SAFETY + MENU FLOW PATCH
+------------------------------------
+
+Built after reviewing the 20260608_213024 upload.
+
+Fixes / improvements:
+- Pretty tests now prevent Mac sleep during active tests using caffeinate -dimsu.
+- Friendly Test UI now has an active-test lock:
+    logs/.active_test.lock
+  This prevents accidentally running two stress tests at the same time.
+- Test JSON now records sleep_prevention and actual_command.
+- New Python menu replaces the older zsh menu prompt flow:
+    ./run_pretty_test_menu.sh
+  It has duration presets, custom duration, back, and quit handling.
+- Deep sensor probe is now timeout-protected:
+    ./run_deep_sensor_probe.sh
+  Default timeout is 12 seconds per probe command.
+- Added awake monitor wrapper:
+    ./run_power_monitor_powermetrics_awake.sh
+
+Recommended workflow:
+  Terminal 1:
+    ./run_power_monitor_powermetrics_awake.sh
+
+  Terminal 2:
+    ./run_pretty_test_menu.sh
+
+The default packer includes:
+- power monitor logs
+- report HTML
+- debug JSON
+- events JSONL
+- friendly test logs
+- structured test run JSON
+- test_runs.jsonl
+- sensor snapshots/probes
+
+
+v0.6.3 UI + SENSOR SNAPSHOT PATCH
+---------------------------------
+
+Fixes:
+- Removed false main-screen Low Power Mode warning from raw macOS 27 System Information fields.
+  Raw LowPowerMode values are still available in --full/debug, but they are not trusted
+  for the main dashboard because they can disagree with the Battery settings UI.
+- System sensor snapshot is now timeout-safe:
+    ./run_system_sensor_snapshot.sh
+  It should no longer hang on pmset thermlog or powermetrics.
+- Friendly Test UI now shows live workload process activity:
+    child process count, summed CPU %, RAM MB, process names.
+  This helps CPU/GPU tests look alive even when the underlying GPU tool is quiet.
+- GPU stress profiles are now more responsive. Extreme/high profiles use smaller
+  command chunks so requested test durations are respected more closely.
+- Friendly Test UI now shows overtime when a child workload is still finishing.
+- Menu now includes:
+    Start Power Monitor — awake + powermetrics
+
+Recommended all-in-one flow:
+  Terminal 1:
+    ./run_pretty_test_menu.sh
+    Choose 1) Start Power Monitor
+
+  Terminal 2:
+    ./run_pretty_test_menu.sh
+    Choose a stress test
+
+
+v0.6.4 MONITOR LAUNCH + POWERMETRICS CONFIDENCE PATCH
+-----------------------------------------------------
+
+Built after the screenshot showing:
+- Test UI sees CPU stress: high summed process CPU.
+- Power Monitor shows low/zero CPU watts from powermetrics.
+
+Interpretation:
+- The CPU workload is running.
+- macOS 27 powermetrics component parsing can be incomplete or zero for CPU/GPU
+  even while BMS SystemPower and process CPU prove activity.
+- BMS SystemPower remains the primary internal total-load number.
+
+New:
+- Power Monitor can open in a new Terminal window:
+    ./open_power_monitor_window.sh
+- One-step startup:
+    ./start_macpowerlab.sh
+  This builds tools, opens Power Monitor in a new Terminal window, then opens the menu.
+- Menu option 1 now opens Power Monitor in a new Terminal window instead of taking over the menu window.
+- Monitor now shows a "Component note" under powermetrics when CPU/GPU component watts look incomplete.
+- Test UI shows output age to make quiet child processes easier to understand.
+- CPU sanity checker:
+    ./run_cpu_sanity_check.sh 20
+
+
+v0.6.5 PROCESS WORKLOAD + CPU PROOF PATCH
+-----------------------------------------
+
+Built after screenshots showing CPU stress at 1200%+ process CPU while
+powermetrics CPU watts stayed at 0.00 W.
+
+Interpretation:
+- CPU stress is working.
+- macOS 27 powermetrics component watts can be incomplete.
+- BMS SystemPower is still the primary total internal load number.
+- Process CPU/RAM is now displayed in the main Power Monitor too.
+
+New monitor fields:
+- Stress process load:
+    CPU %, RAM MB, process names
+- powermetrics Component note:
+    warns when component watts are incomplete and tells you to trust BMS total.
+
+Fixes:
+- CPU sanity checker formatting now prints clean newlines.
+- Reduced false "Possible thermal/power throttling" warnings while plugged in,
+  charging, and battery temperature is low/stable.
+- Menu adds CPU sanity check.
+
+
+v0.6.6 CSV + REPORT FIX
+-----------------------
+
+Built after reviewing mac_power_logs_all_20260608_232145.
+
+Findings from that upload:
+- CPU stress is working.
+- First 30-minute extreme test hit ~129.7 W BMS SystemPower and ~121 W battery discharge.
+- Second 5-minute extreme test on AC reached ~138.9 W visible charger load and ~99.2% charger load.
+- v0.6.5 did not persist the new stress-process fields into CSV due to an older column-name mismatch.
+
+Fixes:
+- Stress process fields now persist to CSV:
+    stress_process_count
+    stress_cpu_percent
+    stress_mem_percent
+    stress_rss_mb
+    stress_process_names
+    stress_workload_active
+    powermetrics_component_note
+- Main monitor shows Stress process load.
+- HTML report includes structured test runs.
+- HTML report includes max stress process CPU/RAM cards when available.
+- CPU sanity checker newline formatting fixed.
+
+
+v0.6.7 CSV HEADER + POWER SPLIT PATCH
+-------------------------------------
+
+Built after reviewing mac_power_logs_all_20260608_233203.
+
+Fix:
+- The stress process data showed on screen but still did not persist to CSV
+  because CSV_HEADERS used the real field names:
+    pm_status, avg_soc_power_w, max_soc_power_w
+  not the older patch target names.
+- v0.6.7 patches the actual CSV_HEADERS block directly.
+
+CSV now includes:
+- stress_process_count
+- stress_cpu_percent
+- stress_mem_percent
+- stress_rss_mb
+- stress_process_names
+- stress_workload_active
+- powermetrics_component_note
+- battery_charge_acceptance_w
+- adapter_power_split_note
+
+UI adds:
+- Power split:
+    system W / battery charge acceptance W / headroom W
+
+Report adds:
+- Peak battery charge acceptance card when available.
+
+
+v0.6.8 CPU CLUSTER + macOS 27 REPORT PATCH
+------------------------------------------
+
+Built after reviewing mac_power_logs_all_20260608_234353 and the macOS scan.
+
+Findings:
+- v0.6.7 finally persisted stress process fields to CSV.
+- powermetrics CPU Power still reports 0 mW on macOS 27, but the cpu_power sampler
+  exposes useful cluster frequency/residency:
+    E-Cluster HW active frequency/residency
+    P0-Cluster HW active frequency/residency
+    P1-Cluster HW active frequency/residency
+- powermetrics smc sampler is not available on this build.
+
+New monitor CSV/UI fields:
+- e_cluster_freq_mhz
+- e_cluster_active_percent
+- p0_cluster_freq_mhz
+- p0_cluster_active_percent
+- p1_cluster_freq_mhz
+- p1_cluster_active_percent
+- p_cluster_active_percent
+
+UI:
+- Adds Cluster activity line under powermetrics.
+- Component note now says CPU watts are missing but cluster residency proves CPU activity.
+
+Reports:
+- macOS sensor report no longer presents raw LowPowerMode=Yes as active Low Power.
+- HTML report separates stable charger load from adapter negotiation transients.
+
+
+v0.7.0 BATTERY BENCHMARK + BETA 2 COMPATIBILITY
+------------------------------------------------
+
+Built for macOS 27 Developer Beta 2 / build 26A5368g.
+
+Major change:
+- MacPowerLab is now a power-first battery benchmark and diagnostic tool.
+
+Beta 2 compatibility:
+- BatteryData.SystemPower may be missing.
+- On Battery Power, primary_total_load_w now uses battery discharge watts.
+- Adds PowerTelemetry SystemEffectiveTotalLoad fields.
+- Adds PowerDistribution IPD input fields.
+- Keeps CPU cluster residency as CPU activity proof when CPU watts are missing.
+
+New CSV fields:
+- actual_battery_draw_w
+- primary_total_load_w
+- primary_total_load_source
+- benchmark_load_w
+- benchmark_power_source_note
+- telemetry_system_effective_total_load_raw
+- telemetry_system_effective_total_load_w
+- telemetry_accum_system_effective_total_load_raw
+- telemetry_accum_system_effective_total_load_count
+- pd_ipd_input_power_raw
+- pd_ipd_input_power_w
+- pd_ipd_input_voltage_raw
+- pd_ipd_input_voltage_v
+- pd_ipd_input_current_raw
+- pd_ipd_input_current_a
+
+Report:
+- generate_report.py rewritten as a benchmark report.
+- Fixes the v0.6.8 max_stable_charger_load NameError.
+- Adds overall battery-system score, battery score, charging score, phase breakdown,
+  power attribution, structured test runs, and health snapshot.
+
+New commands:
+  ./run_battery_benchmark.sh
+  ./run_app_power_watch.sh
+
+Recommended flow:
+  ./start_macpowerlab.sh
+  ./run_battery_benchmark.sh
+
+
+v0.7.1 APPLE DEVELOPER DOCS + XCODE RESEARCH CAPTURE
+-----------------------------------------------------
+
+Purpose:
+- Capture as much as possible from Apple Developer macOS/iOS/Xcode documentation
+  for beta compatibility research.
+- Combine Apple docs, local Xcode/toolchain info, and MacPowerLab benchmark logs.
+
+New commands:
+  ./run_apple_docs_capture.sh
+      Raw HTTP + Apple DocC JSON endpoint capture.
+
+  ./run_apple_docs_capture_safari.sh
+      Safari-rendered page capture + raw/JSON capture.
+      If it fails, enable:
+        Safari > Develop > Allow JavaScript from Apple Events
+
+  ./import_release_notes.sh <file1> <file2>
+      Import manually copied release notes or Apple docs text.
+
+  ./run_xcode_environment_scan.sh
+      Captures xcodebuild, xcrun, SDK, Metal, xctrace, powermetrics help,
+      and System Profiler developer/power/display/thunderbolt/USB data.
+
+  ./generate_beta_compatibility_report.sh
+      Creates a Markdown report connecting Apple docs, Xcode/toolchain state,
+      and latest MacPowerLab CSV sensor availability.
+
+Recommended Beta research flow:
+  ./run_apple_docs_capture_safari.sh
+  ./run_xcode_environment_scan.sh
+  ./run_macos_sensor_scan.sh
+  ./run_system_sensor_snapshot.sh
+  ./run_battery_benchmark.sh
+  ./generate_beta_compatibility_report.sh
+  ./pack_logs.sh
+
+
+v0.7.2 XCODE GUIDE RESEARCH MAP
+--------------------------------
+
+Adds support for using:
+  https://github.com/mikeroyal/Xcode-Guide
+
+as a curated Xcode/Metal/Apple Silicon/Instruments link map.
+
+New commands:
+  ./run_xcode_guide_capture.sh
+      Captures the Xcode Guide repo/README, extracts Apple Developer links,
+      ranks the links by power/performance/Metal/Instruments relevance,
+      and writes APPLE_DOCS_SEED_URLS.txt.
+
+  ./run_developer_research_suite.sh
+      Runs Xcode Guide capture, Apple docs capture seeded by the guide,
+      Xcode/toolchain scan, and beta compatibility report.
+
+Recommended:
+  ./run_developer_research_suite.sh
+  ./run_macos_sensor_scan.sh
+  ./run_system_sensor_snapshot.sh
+  ./run_battery_benchmark.sh
+  ./pack_logs.sh
+
+Useful output folders:
+  logs/xcode_guide_capture_*
+  logs/apple_docs_capture_*
+  logs/xcode_environment_scan_*
+
+
+v0.8.6 ROBUST DEVELOPER CAPTURE + COMPLETE BETA BENCHMARK FLOW
+---------------------------------------------------------------
+
+Built after the v0.7.2 upload showed:
+- Xcode Guide capture failed with SSL CERTIFICATE_VERIFY_FAILED.
+- Apple docs capture failed with SSL CERTIFICATE_VERIFY_FAILED.
+- Xcode environment is using Command Line Tools, not full Xcode.
+- metal/metallib are unavailable until full Xcode beta is installed/selected.
+- No mac_power_*.csv was present because the Power Monitor was not running.
+
+Fixes:
+- Public-doc captures now fall back from Python TLS to unverified public-doc TLS,
+  then to macOS curl -k -L.
+- Apple docs capture has more default high-value Apple docs seeds.
+- Developer research suite retries Safari capture if raw/docs capture returns no useful keyword hits.
+- Xcode environment scan writes xcode_status_summary.txt with fix instructions.
+- Beta compatibility report shows capture health warnings.
+- Battery benchmark warns when no Power Monitor CSV exists.
+- New one-command capture flow:
+    ./run_complete_beta_capture.sh
+
+Recommended now:
+  ./run_complete_beta_capture.sh
+
+If Xcode status says CommandLineTools only:
+  sudo xcode-select -s /Applications/Xcode-beta.app/Contents/Developer
+
+Then rerun:
+  ./run_xcode_environment_scan.sh
+  ./run_developer_research_suite.sh
+  ./pack_logs.sh
+
+
+v0.8.6 ZSH EMPTY-GLOB FIX
+-------------------------
+
+Built after run_complete_beta_capture.sh failed immediately with:
+
+  no matches found: logs/mac_power_*.csv
+
+Cause:
+- zsh throws an error when a glob has no matches.
+- The script was checking whether a CSV existed, but zsh stopped before the check.
+
+Fix:
+- Replaced fragile ls/glob checks with find-based checks.
+- run_complete_beta_capture.sh now works with an empty logs folder.
+- run_battery_benchmark.sh now warns safely if no Power Monitor CSV exists.
+- run_developer_research_suite.sh now safely finds latest capture folders.
+- open_latest_report.sh now safely handles no report existing yet.
+
+Run:
+  ./run_complete_beta_capture.sh
+
+
+v0.8.6 BETA 2 POWER-MATH + BATTERY BANK PATCH
+----------------------------------------------
+
+Built after reviewing mac_power_logs_with_macos_scan_20260627_144203.
+
+Findings from that upload:
+- Developer docs capture worked.
+- Xcode Guide capture worked.
+- Power Monitor produced a CSV.
+- macOS sensor scan worked.
+- No benchmark test_runs were included yet.
+- BatteryData.SystemPower is still missing.
+- AppleSmartBatteryBank exposes battery temperature/cell values that root AppleSmartBattery did not expose.
+- AC charging math was double-counting adapter input power plus battery charge.
+
+Fixes:
+- Reads AppleSmartBatteryBank data.
+- Restores battery temperature and cell-bank stats where available.
+- Uses a more robust temperature decoder for deci-Kelvin vs centi-Celsius beta differences.
+- Stops treating PowerDistribution IPDInputPower as system load on AC.
+- Charger load now uses adapter draw versus adapter capacity instead of system + battery double counting.
+- Battery benchmark supports MACPOWERLAB_NO_PROMPT=1.
+- Complete capture now runs battery benchmark non-interactively.
+
+Recommended:
+  ./run_complete_beta_capture.sh
+
+
+v0.8.6 TEST-RUN SUMMARY + AC/BATTERY BENCHMARK SPLIT
+-----------------------------------------------------
+
+Built after reviewing mac_power_logs_all_20260711_113910.
+
+Findings from that upload:
+- Power Monitor worked.
+- Apple docs capture worked.
+- Xcode Guide capture worked.
+- Structured benchmark test_runs worked.
+- The Mac reported macOS 26.5.2 build 25F84 in the scan.
+- Xcode 26.6 is selected, but Metal Toolchain is missing.
+- The benchmark ran on AC Power, so it is an AC/charger/load benchmark, not a battery-discharge runtime benchmark.
+
+New:
+  ./generate_test_run_summary.sh
+      Creates per-test Markdown + JSON summaries by joining test_runs.jsonl and the power CSV.
+
+  ./run_ac_adapter_benchmark.sh
+      Explicit AC/charging benchmark.
+
+  ./run_battery_discharge_benchmark.sh
+      Explicit unplugged battery benchmark; refuses to run if still on AC.
+
+Fixes:
+- Complete capture now generates the test-run power summary.
+- Xcode scan now recommends:
+    xcodebuild -downloadComponent MetalToolchain
+  when metal/metallib are missing.
+- Apple docs discovered-link crawling filters noisy assets/css/js/fonts.
+- macOS sensor analyzer wording no longer says macOS 27 when the current scan is not macOS 27.
+
+Recommended:
+  For charger/load testing:
+    ./run_ac_adapter_benchmark.sh
+
+  For real battery runtime/discharge testing:
+    ./run_battery_discharge_benchmark.sh
+
+
+v0.8.6 BATTERY RUNTIME SUMMARY PATCH
+------------------------------------
+
+Built after reviewing a true unplugged v0.7.6 battery benchmark.
+
+Findings:
+- v0.7.6 successfully captured CPU/GPU/memory/extreme battery-discharge tests.
+- The per-test summary incorrectly used AC wording for normal Battery Power discharge.
+- Battery percentage can lag at 100% even while Wh counters show real discharge.
+
+Fixes:
+- Correctly classifies Battery Power vs AC Power benchmark runs.
+- AC battery-assist warnings only appear when the Mac is on AC but the battery is discharging.
+- Adds per-test Wh used, Wh charged, net Wh, battery percent delta.
+- Adds runtime projection from full battery for each workload.
+- Adds time-to-empty projection for the current charge level.
+- Adds estimated full/remaining Wh to each per-test section.
+
+Run:
+  ./generate_test_run_summary.sh
+
+
+v0.8.6 BATTERY BENCHMARK SCORECARD + HISTORY
+--------------------------------------------
+
+Built after reviewing another clean unplugged battery-discharge benchmark.
+
+New command:
+  ./generate_battery_scorecard.sh
+
+What it does:
+- Reads the latest test_run_power_summary_*.json.
+- Creates a compact battery benchmark scorecard.
+- Scores endurance, sustained load, thermals, and cell/battery stability.
+- Appends persistent benchmark history to:
+    logs/battery_benchmark_scores.jsonl
+- If two or more scorecards exist, writes a comparison report.
+
+New outputs:
+  logs/battery_benchmark_scorecard_*.md
+  logs/battery_benchmark_scorecard_*.json
+  logs/battery_benchmark_scores.jsonl
+  logs/battery_benchmark_compare_*.md
+
+Updated:
+- Battery/AC benchmark wrappers now generate the test-run summary and scorecard automatically.
+- Complete beta capture also generates the scorecard.
+
+Run:
+  ./generate_test_run_summary.sh
+  ./generate_battery_scorecard.sh
+
+
+v0.8.6 AUTO-LAUNCH MAC POWER MONITOR
+------------------------------------
+
+Built because benchmark commands should start Mac Power Monitor automatically.
+
+New helper:
+  ./ensure_power_monitor_running.sh
+
+What it does:
+- Checks whether a fresh mac_power_*.csv is being written.
+- If not, opens Mac Power Monitor in a new Terminal window.
+- Waits for a fresh power CSV before the benchmark starts.
+- Avoids launching another monitor if one is already actively logging.
+
+Updated commands:
+  ./run_battery_discharge_benchmark.sh
+  ./run_ac_adapter_benchmark.sh
+  ./run_battery_benchmark.sh
+  ./run_complete_beta_capture.sh
+
+New quick launcher:
+  ./start_monitor_and_menu.sh
+
+Recommended now:
+  For unplugged battery benchmark:
+    ./run_battery_discharge_benchmark.sh
+
+  For plugged-in charger benchmark:
+    ./run_ac_adapter_benchmark.sh
+
+The monitor should launch automatically first.
+
+
+v0.8.6 CPU CLUSTER FREQ + THERMAL DISPLAY PATCH
+------------------------------------------------
+
+Built after reviewing the v0.7.9 screenshot and uploaded zip.
+
+Problem:
+- The UI showed:
+    Freq/thermal: CPU n/a / GPU 338.0 MHz / thermal n/a
+- The CSV already had E/P0/P1 CPU cluster frequency/residency values.
+- The UI was looking at cpu_frequency_mhz, which recent powermetrics output does
+  not populate as a single CPU field.
+- macOS thermal pressure was not exposed by the sampler output, even though
+  MacPowerLab had its own battery-temperature/trend thermal state.
+
+Fixes:
+- UI now shows CPU clusters:
+    E xxxxMHz/xx% | P0 xxxxMHz/xx% | P1 xxxxMHz/xx%
+- Adds cpu_frequency_estimate_mhz as a residency-weighted cluster estimate.
+- Adds cpu_cluster_summary.
+- Adds thermal_pressure_effective and thermal_pressure_source.
+- GPU/thermal line now shows MacPowerLab thermal state when macOS thermal pressure
+  is not exposed.
+- powermetrics worker now tries thermal/smc samplers before falling back.
+- False throttle warning is less likely when only powermetrics component watts drop.
+- Adds probe:
+    ./run_powermetrics_thermal_probe.sh
+
+Recommended:
+  ./run_powermetrics_thermal_probe.sh
+  ./run_battery_discharge_benchmark.sh
+
+
+v0.8.6 THERMAL PROBE TIMEOUT FIX
+---------------------------------
+
+Built after run_powermetrics_thermal_probe.sh hung at:
+
+  pmset -g thermlog
+
+Cause:
+- pmset -g thermlog can behave like a live stream instead of a one-shot command.
+
+Fix:
+- Every probe command now has a timeout.
+- pmset thermlog and pmset therm are capped to short runs.
+- The probe still writes whatever output was captured before timeout.
+
+New helper:
+  ./run_thermal_quick_check.sh
+
+Recommended:
+  ./run_powermetrics_thermal_probe.sh
+  ./pack_logs.sh
+
+
+v0.8.6 THERMAL SAMPLER CONFIRMED PATCH
+---------------------------------------
+
+Built after reviewing mac_power_logs_all_20260711_203337.
+
+Probe result:
+- powermetrics help lists the thermal sampler.
+- `sudo powermetrics --samplers cpu_power,gpu_power,thermal` works.
+- It returns:
+    Current pressure level: Nominal
+- CPU cluster frequency/residency works.
+- GPU frequency works.
+- `smc` sampler is not supported on this Mac.
+- `pmset -g thermlog` behaves like a live stream and should not be used as a normal one-shot probe.
+
+Fixes:
+- Monitor no longer tries unsupported smc sampler.
+- Thermal display now combines:
+    macOS thermal pressure + MacPowerLab battery temperature trend
+  Example:
+    macOS Nominal / battery rising
+- Probe no longer runs smc by default.
+- New analyzer:
+    ./analyze_powermetrics_probe.sh
+- Probe automatically writes a human-readable analysis file.
+
+Recommended:
+  ./run_powermetrics_thermal_probe.sh
+  ./run_battery_discharge_benchmark.sh
+
+
+v0.8.6 HOTFIX: MISSING CPU CLUSTER HELPER
+-----------------------------------------
+
+Built after v0.8.2 monitor showed:
+
+  ERROR: name 'derive_cpu_cluster_fields' is not defined
+
+Cause:
+- v0.8.2 correctly called the new CPU cluster display helper, but the helper
+  function was not inserted into mac_power_watch.py during packaging.
+
+Fix:
+- Adds derive_cpu_cluster_fields().
+- Adds derive_thermal_pressure_fields().
+- Keeps CPU cluster summary display:
+    E xxxxMHz/xx% | P0 xxxxMHz/xx% | P1 xxxxMHz/xx%
+- Keeps combined thermal display:
+    macOS Nominal / battery rising
+- Bumps monitor to v0.11.4.
+
+Recommended:
+  Stop any running v0.8.2 monitor with Ctrl+C.
+  Use v0.8.6:
+    ./run_battery_discharge_benchmark.sh
+
+
+v0.8.6 SCORECARD OVERALL SCORE FIX
+-----------------------------------
+
+Built after reviewing a v0.8.3 benchmark upload where:
+
+- Endurance score: 96.6/100
+- Sustained load score: 98.1/100
+- Thermal score: 100.0/100
+- Stability score: 100.0/100
+- But overall score incorrectly showed 24.6/100
+
+Cause:
+- v0.7.8-v0.8.3 averaged the already-weighted score components instead of summing
+  weighted components and normalizing by active weights.
+
+Fix:
+- Overall score now uses:
+    endurance 35%
+    sustained load 25%
+    thermals 25%
+    stability 15%
+
+For the reviewed run, that means the correct overall score is about:
+  98.3/100
+
+New repair tool:
+  ./repair_battery_score_history.sh
+
+Use it once if your old logs/history contain the incorrect ~25/100 score.
+
+
+v0.8.6 AC CHARGER LOAD ESTIMATE FIX
+------------------------------------
+
+Built after reviewing a v0.8.4 monitor-only upload.
+
+Findings:
+- Monitor ran correctly.
+- CPU cluster summary worked.
+- macOS thermal pressure showed Nominal.
+- Battery charged from 77% to 100%.
+- But charger load showed 100% for the whole run.
+
+Cause:
+- The monitor treated adapter_calculated_watts / 28V * 5A = 140W as actual live draw.
+- That value is normally the negotiated USB-C PD capacity/contract, not measured draw.
+
+Fix:
+- On AC Power, charger load now estimates adapter output as:
+    charging:       primary system load + battery charge acceptance
+    battery assist: primary system load - battery discharge assist
+    neutral:        primary system load
+- visible_load_estimate_w now uses this AC output estimate.
+- charger_load_percent = AC output estimate / adapter rated watts.
+- Adds:
+    ac_output_estimate_w
+    ac_output_estimate_source
+    battery_assist_w
+- UI adds "Load source" so the estimate is transparent.
+
+Note:
+- Exact wall draw still requires a wall or USB-C watt meter.
+
+
+v0.8.6 EXTREME SOAK + PARTIAL RUN CLEANUP
+------------------------------------------
+
+Built after reviewing a 30-minute requested extreme run that was stopped manually
+after about 11m50s.
+
+Findings:
+- The extreme workload was real and heavy.
+- Peak battery draw exceeded 112 W.
+- CPU/GPU/memory all stayed active.
+- The run was manually stopped, but the old Test UI recorded it as "failed" because
+  the child process exited with SIGTERM (-15).
+- The phase label came from run_max_power_test.sh and said MAX POWER even though
+  the wrapper title said EXTREME POWER.
+- v0.8.5 AC estimate fields existed in the row data but were missing from CSV_HEADERS.
+
+Fixes:
+- Ctrl+C / SIGTERM / stopped-by-user runs are recorded as status "stopped" instead of "failed".
+- Extreme runs now set phase:
+    EXTREME POWER: CPU + extreme GPU + memory
+- Adds CSV headers:
+    ac_output_estimate_w
+    ac_output_estimate_source
+    battery_assist_w
+- Test summaries now mark stopped/partial soak runs clearly.
+- Adds one-command heavy benchmark:
+    ./run_extreme_soak_benchmark.sh
+
+Examples:
+  15-minute extreme soak:
+    ./run_extreme_soak_benchmark.sh 900
+
+  30-minute extreme soak:
+    ./run_extreme_soak_benchmark.sh 1800

@@ -1,0 +1,21 @@
+{
+  "name": "MacPowerLab",
+  "version": "1.0.2",
+  "created_at": "2026-07-13T04:42:15",
+  "checks": {
+    "go_test_all_packages": "passed",
+    "go_vet": "passed",
+    "swift_source_parse": "passed",
+    "project_scoped_quarantine_removal": true,
+    "darwin_binary_ad_hoc_signing": true,
+    "cli_execution_smoke_test_added": true,
+    "native_workload_signing": true,
+    "swiftui_nested_signing": true,
+    "global_gatekeeper_disable": false
+  },
+  "mac_live_validation": [
+    "./scripts/bootstrap_macos.sh",
+    "./scripts/validate_on_mac.sh",
+    "open ./dist/MacPowerLab.app"
+  ]
+}

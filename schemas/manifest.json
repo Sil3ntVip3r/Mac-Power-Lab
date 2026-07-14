@@ -1,0 +1,37 @@
+{
+  "version": "1",
+  "contracts": [
+    {
+      "file": "power_sample.schema.json",
+      "schema": "macpowerlab.power_sample.v1"
+    },
+    {
+      "file": "app_power.schema.json",
+      "schema": "macpowerlab.app_power.v1"
+    },
+    {
+      "file": "event.schema.json",
+      "schema": "macpowerlab.event.v1"
+    },
+    {
+      "file": "test_run.schema.json",
+      "schema": "macpowerlab.test_run.v1"
+    },
+    {
+      "file": "session.schema.json",
+      "schema": "macpowerlab.session.v1"
+    },
+    {
+      "file": "status.schema.json",
+      "schema": "macpowerlab.status.v1"
+    },
+    {
+      "file": "session_summary.schema.json",
+      "schema": "macpowerlab.session_summary.v1"
+    },
+    {
+      "file": "parity_report.schema.json",
+      "schema": "macpowerlab.parity_report.v1"
+    }
+  ]
+}

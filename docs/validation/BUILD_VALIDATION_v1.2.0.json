@@ -1,0 +1,21 @@
+{
+  "name": "MacPowerLab",
+  "version": "1.2.0",
+  "created_at": "2026-07-13T05:24:37",
+  "checks": {
+    "go_test_all_packages": "passed",
+    "go_vet": "passed",
+    "darwin_arm64_cross_build": "passed",
+    "swift_source_parse": "passed",
+    "monitor_workspaces": 5,
+    "expanded_swift_contracts": "passed",
+    "dedicated_application_table": true,
+    "application_table_not_nested_in_scrollview": true,
+    "full_monitor_omits_application_rows": true,
+    "dashboard_ui_regression_tests": "passed"
+  },
+  "mac_live_validation": [
+    "./scripts/bootstrap_macos.sh",
+    "open ./dist/MacPowerLab.app"
+  ]
+}

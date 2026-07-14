@@ -1,0 +1,9 @@
+* text=auto eol=lf
+*.sh text eol=lf
+*.go text eol=lf
+*.swift text eol=lf
+*.c text eol=lf
+*.m text eol=lf
+*.metal text eol=lf
+*.json text eol=lf
+*.md text eol=lf

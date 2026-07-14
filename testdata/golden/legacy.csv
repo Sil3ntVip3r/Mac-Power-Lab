@@ -1,0 +1,2 @@
+timestamp,power_source,battery_percent,battery_voltage_v,battery_current_a,net_battery_watts,battery_temp_c,adapter_reported_watts,cpu_power_w,gpu_power_w,primary_total_load_w
+2026-07-13T12:00:00Z,Battery Power,80,24.1,-2.0,-48.2,34.5,0,20,10,48.2
