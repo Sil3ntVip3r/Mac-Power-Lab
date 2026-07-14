@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>elapsed_ns</key><integer>2000000000</integer>
+<key>thermal_pressure</key><string>Nominal</string>
+<key>processor</key><dict>
+  <key>cpu_power</key><real>18.5</real>
+  <key>gpu_power</key><real>12.25</real>
+  <key>ane_power</key><real>1.5</real>
+  <key>dram_power</key><real>3.75</real>
+  <key>gpu_freq_hz</key><integer>900000000</integer>
+  <key>clusters</key><array>
+    <dict><key>name</key><string>E</string><key>freq_hz</key><integer>1800000000</integer><key>idle_ns</key><integer>400000000</integer></dict>
+    <dict><key>name</key><string>P0</string><key>freq_hz</key><integer>3500000000</integer><key>idle_ns</key><integer>200000000</integer></dict>
+  </array>
+</dict>
+<key>coalitions</key><array>
+  <dict><key>id</key><integer>10</integer><key>name</key><string>com.apple.Safari</string><key>energy_impact_per_s</key><real>18.2</real><key>cputime_ms_per_s</key><real>420</real><key>gputime_ms_per_s</key><real>120</real><key>intr_wakeups_per_s</key><real>8</real></dict>
+  <dict><key>id</key><integer>20</integer><key>name</key><string>com.apple.WindowServer</string><key>energy_impact_per_s</key><real>10.1</real><key>cputime_ms_per_s</key><real>180</real><key>gputime_ms_per_s</key><real>200</real><key>idle_wakeups_per_s</key><real>4</real></dict>
+</array>
+</dict></plist>

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://macpowerlab.local/contracts/v1/event.schema.json",
+  "title": "macpowerlab.event.v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "timestamp",
+    "session_id",
+    "type"
+  ],
+  "properties": {
+    "schema": {
+      "const": "macpowerlab.event.v1"
+    }
+  },
+  "additionalProperties": true
+}

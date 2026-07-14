@@ -1,0 +1,53 @@
+{
+  "name": "MacPowerLab",
+  "version": "1.3.0",
+  "review_target": "MacPowerLab v1.2.0 Go engine",
+  "created_at": "2026-07-13T00:00:00Z",
+  "repository_state": {
+    "git_repository": false,
+    "repository_instructions_found": false,
+    "diff_method": "source-to-source unified diff"
+  },
+  "baseline_v1_2_0": {
+    "go_test_all_packages": "passed",
+    "go_test_race_all_packages": "passed",
+    "statement_coverage_percent": 29.3
+  },
+  "refactored_v1_3_0": {
+    "gofmt": "passed",
+    "go_test_all_packages_uncached": "passed",
+    "go_vet_all_packages": "passed",
+    "go_test_race_serial_all_packages": "passed",
+    "race_shuffle_lifecycle_packages_20_iterations": "passed",
+    "go_mod_verify": "passed",
+    "statement_coverage_percent": 42.3,
+    "darwin_arm64_cross_build": "passed",
+    "darwin_amd64_cross_build": "passed",
+    "linux_amd64_build_and_version_smoke_test": "passed",
+    "swift_source_parse": "passed",
+    "extracted_zip_go_test_all_packages": "passed",
+    "extracted_zip_go_vet": "passed",
+    "extracted_zip_linux_version_smoke_test": "passed",
+    "manager_restart_guard": "passed",
+    "cancelled_engine_context_guard": "passed"
+  },
+  "benchmarks_linux_amd64_go1_23_2": {
+    "attributor_200_processes": {
+      "ns_per_op": 169077,
+      "bytes_per_op": 151116,
+      "allocs_per_op": 213,
+      "normal_cadence": "10 seconds"
+    },
+    "powermetrics_fixture_parse": {
+      "ns_per_op": 16290,
+      "bytes_per_op": 6842,
+      "allocs_per_op": 87
+    }
+  },
+  "not_run": [
+    "staticcheck: not installed",
+    "golangci-lint: not installed",
+    "govulncheck: not installed",
+    "live privileged Darwin sensor and benchmark validation: Linux build environment"
+  ]
+}

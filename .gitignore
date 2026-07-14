@@ -1,0 +1,48 @@
+# Build products
+/bin/
+/dist/
+*.app/
+*.dSYM/
+
+# Runtime data
+/logs/
+/exports/
+/data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.jsonl
+
+# Local state and credentials
+api.token
+api.token.address
+current_phase.txt
+.env
+.env.*
+!.env.example
+
+# macOS / editors
+.DS_Store
+.AppleDouble
+.LSOverride
+.vscode/
+.idea/
+*.swp
+*~
+
+# Language caches
+__pycache__/
+*.py[cod]
+.coverage
+coverage.out
+*.test
+
+# Archives and generated reports
+*.zip
+*.tar
+*.tar.gz
+*.tar.xz
+*.tgz
+*.html

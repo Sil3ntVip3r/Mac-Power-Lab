@@ -1,0 +1,530 @@
+// Package store provides streaming JSONL and optional SQLite persistence.
+package store
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/execx"
+	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/model"
+)
+
+const (
+	jsonlBufferSize  = 256 << 10
+	scannerMaxRecord = 16 << 20
+	sqliteCloseGrace = 5 * time.Second
+)
+
+// SessionStore owns all files for one monitoring session.
+//
+// All public methods are safe for concurrent use. JSONL is the canonical data
+// source; SQLite is an optional mirror and its errors are surfaced rather than
+// silently discarded.
+type SessionStore struct {
+	mu      sync.Mutex
+	Dir     string
+	Session model.Session
+	samples *jsonlWriter
+	apps    *jsonlWriter
+	events  *jsonlWriter
+	tests   *jsonlWriter
+	sqlite  sqliteMirror
+	closed  bool
+}
+
+type jsonlWriter struct {
+	file *os.File
+	buf  *bufio.Writer
+	enc  *json.Encoder
+}
+
+type sqliteMirror interface {
+	write(string, time.Time, any) error
+	flush() error
+	close() error
+}
+
+// MirrorDegradedError reports that canonical JSONL persistence succeeded but
+// the optional SQLite mirror was disabled after a runtime failure. Callers may
+// surface this once without treating the monitoring session as lost.
+type MirrorDegradedError struct {
+	Operation string
+	Err       error
+}
+
+func (e *MirrorDegradedError) Error() string {
+	return fmt.Sprintf("SQLite mirror disabled during %s: %v", e.Operation, e.Err)
+}
+
+func (e *MirrorDegradedError) Unwrap() error { return e.Err }
+
+func newJSONL(path string) (*jsonlWriter, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	buffer := bufio.NewWriterSize(f, jsonlBufferSize)
+	return &jsonlWriter{file: f, buf: buffer, enc: json.NewEncoder(buffer)}, nil
+}
+
+func (w *jsonlWriter) write(v any) error {
+	if w == nil || w.file == nil || w.buf == nil || w.enc == nil {
+		return errors.New("JSONL writer is not initialized")
+	}
+	return w.enc.Encode(v)
+}
+
+func (w *jsonlWriter) flush() error {
+	if w == nil || w.buf == nil {
+		return nil
+	}
+	return w.buf.Flush()
+}
+
+func (w *jsonlWriter) close() error {
+	if w == nil {
+		return nil
+	}
+	var errs []error
+	if w.buf != nil {
+		errs = append(errs, w.buf.Flush())
+	}
+	if w.file != nil {
+		errs = append(errs, w.file.Sync(), w.file.Close())
+	}
+	return errors.Join(errs...)
+}
+
+// NewSession creates an isolated session directory with private permissions.
+// Existing session IDs are rejected so two sessions can never append into the
+// same JSONL files.
+func NewSession(base string, session model.Session, withSQLite bool) (_ *SessionStore, retErr error) {
+	if strings.TrimSpace(base) == "" {
+		return nil, errors.New("session base directory is required")
+	}
+	if strings.TrimSpace(session.ID) == "" {
+		return nil, errors.New("session ID is required")
+	}
+
+	sessionsDir := filepath.Join(base, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create sessions directory: %w", err)
+	}
+	dir := filepath.Join(sessionsDir, session.ID)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("create unique session directory: %w", err)
+	}
+	cleanupDir := true
+	defer func() {
+		if retErr != nil && cleanupDir {
+			_ = os.RemoveAll(dir)
+		}
+	}()
+
+	session.DataDirectory = dir
+	s := &SessionStore{Dir: dir, Session: session}
+	cleanupWriters := func() {
+		_ = errors.Join(
+			s.samples.close(),
+			s.apps.close(),
+			s.events.close(),
+			s.tests.close(),
+		)
+		if s.sqlite != nil {
+			_ = s.sqlite.close()
+		}
+	}
+
+	var err error
+	if s.samples, err = newJSONL(filepath.Join(dir, "samples.jsonl")); err != nil {
+		cleanupWriters()
+		return nil, fmt.Errorf("create samples log: %w", err)
+	}
+	if s.apps, err = newJSONL(filepath.Join(dir, "apps.jsonl")); err != nil {
+		cleanupWriters()
+		return nil, fmt.Errorf("create apps log: %w", err)
+	}
+	if s.events, err = newJSONL(filepath.Join(dir, "events.jsonl")); err != nil {
+		cleanupWriters()
+		return nil, fmt.Errorf("create events log: %w", err)
+	}
+	if s.tests, err = newJSONL(filepath.Join(dir, "test_runs.jsonl")); err != nil {
+		cleanupWriters()
+		return nil, fmt.Errorf("create test-runs log: %w", err)
+	}
+
+	if withSQLite {
+		s.sqlite, err = newSQLite(filepath.Join(dir, "session.sqlite3"))
+		if err != nil {
+			var missing *exec.Error
+			if !errors.As(err, &missing) {
+				cleanupWriters()
+				return nil, fmt.Errorf("initialize SQLite mirror: %w", err)
+			}
+			// sqlite3 is an optional capability. Absence is not session failure.
+			s.sqlite = nil
+		}
+	}
+	if err := s.writeSession(); err != nil {
+		cleanupWriters()
+		return nil, fmt.Errorf("write session metadata: %w", err)
+	}
+	cleanupDir = false
+	return s, nil
+}
+
+func (s *SessionStore) WriteSample(v model.PowerSample) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return errors.New("store closed")
+	}
+	if err := s.samples.write(v); err != nil {
+		return fmt.Errorf("write sample JSONL: %w", err)
+	}
+	for _, app := range v.Attribution.Apps {
+		if err := s.apps.write(app); err != nil {
+			return fmt.Errorf("write app JSONL: %w", err)
+		}
+	}
+	if s.sqlite != nil {
+		if err := s.sqlite.write("samples", v.Timestamp, v); err != nil {
+			return s.disableSQLiteLocked("sample write", err)
+		}
+		for _, app := range v.Attribution.Apps {
+			if err := s.sqlite.write("apps", v.Timestamp, app); err != nil {
+				return s.disableSQLiteLocked("app write", err)
+			}
+		}
+	}
+	return nil
+}
+
+func (s *SessionStore) WriteEvent(v model.Event) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return errors.New("store closed")
+	}
+	if err := s.events.write(v); err != nil {
+		return fmt.Errorf("write event JSONL: %w", err)
+	}
+	if s.sqlite != nil {
+		if err := s.sqlite.write("events", v.Timestamp, v); err != nil {
+			return s.disableSQLiteLocked("event write", err)
+		}
+	}
+	return nil
+}
+
+func (s *SessionStore) WriteTestRun(v model.TestRun) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return errors.New("store closed")
+	}
+	if err := s.tests.write(v); err != nil {
+		return fmt.Errorf("write test-run JSONL: %w", err)
+	}
+	if s.sqlite != nil {
+		if err := s.sqlite.write("test_runs", v.StartedAt, v); err != nil {
+			return s.disableSQLiteLocked("test-run write", err)
+		}
+	}
+	return nil
+}
+
+func (s *SessionStore) disableSQLiteLocked(operation string, cause error) error {
+	if s.sqlite == nil {
+		return nil
+	}
+	sink := s.sqlite
+	s.sqlite = nil
+	closeErr := sink.close()
+	return &MirrorDegradedError{
+		Operation: operation,
+		Err:       errors.Join(cause, closeErr),
+	}
+}
+
+// Flush persists all buffered data without closing the session.
+func (s *SessionStore) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	var errs []error
+	errs = append(errs,
+		s.samples.flush(),
+		s.apps.flush(),
+		s.events.flush(),
+		s.tests.flush(),
+	)
+	if s.sqlite != nil {
+		if err := s.sqlite.flush(); err != nil {
+			errs = append(errs, s.disableSQLiteLocked("flush", err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (s *SessionStore) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	s.Session.EndedAt = time.Now()
+
+	var errs []error
+	errs = append(errs, s.writeSession())
+	errs = append(errs,
+		s.samples.close(),
+		s.apps.close(),
+		s.events.close(),
+		s.tests.close(),
+	)
+	if s.sqlite != nil {
+		errs = append(errs, s.sqlite.close())
+	}
+	return errors.Join(errs...)
+}
+
+func (s *SessionStore) writeSession() error {
+	return atomicJSON(filepath.Join(s.Dir, "session.json"), s.Session)
+}
+
+func atomicJSON(path string, v any) error {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+"-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(b); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
+}
+
+// ReadJSONL streams a JSONL file one object at a time without unbounded memory.
+func ReadJSONL[T any](path string, fn func(T) error) error {
+	if fn == nil {
+		return errors.New("JSONL callback is required")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64<<10), scannerMaxRecord)
+	line := 0
+	for scanner.Scan() {
+		line++
+		var value T
+		if err := json.Unmarshal(scanner.Bytes(), &value); err != nil {
+			return fmt.Errorf("%s line %d: %w", path, line, err)
+		}
+		if err := fn(value); err != nil {
+			return err
+		}
+	}
+	return scanner.Err()
+}
+
+type sqliteSink struct {
+	cmd    *exec.Cmd
+	in     *bufio.Writer
+	stdin  io.WriteCloser
+	stderr *execx.LimitedBuffer
+	mu     sync.Mutex
+	closed bool
+}
+
+func newSQLite(path string) (*sqliteSink, error) {
+	bin, err := exec.LookPath("sqlite3")
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(bin, path)
+	pipe, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stderr := execx.NewLimitedBuffer(1 << 20)
+	cmd.Stderr = stderr
+	if err := cmd.Start(); err != nil {
+		_ = pipe.Close()
+		return nil, err
+	}
+	sink := &sqliteSink{
+		cmd:    cmd,
+		in:     bufio.NewWriterSize(pipe, 128<<10),
+		stdin:  pipe,
+		stderr: stderr,
+	}
+	const schema = "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; " +
+		"CREATE TABLE IF NOT EXISTS records(" +
+		"kind TEXT NOT NULL, timestamp TEXT NOT NULL, json TEXT NOT NULL); " +
+		"CREATE INDEX IF NOT EXISTS records_kind_time ON records(kind,timestamp);\n"
+	if _, err := sink.in.WriteString(schema); err != nil {
+		_ = sink.close()
+		return nil, err
+	}
+	if err := sink.in.Flush(); err != nil {
+		_ = sink.close()
+		return nil, err
+	}
+	return sink, nil
+}
+
+func (s *sqliteSink) write(kind string, ts time.Time, v any) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return errors.New("SQLite sink closed")
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	kind = strings.ReplaceAll(kind, "'", "''")
+	payload := strings.ReplaceAll(string(b), "'", "''")
+	_, err = fmt.Fprintf(
+		s.in,
+		"INSERT INTO records(kind,timestamp,json) VALUES('%s','%s','%s');\n",
+		kind,
+		ts.Format(time.RFC3339Nano),
+		payload,
+	)
+	return err
+}
+
+func (s *sqliteSink) flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	return s.in.Flush()
+}
+
+func (s *sqliteSink) close() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	var writeErr error
+	if s.in != nil {
+		if _, err := s.in.WriteString("PRAGMA wal_checkpoint(TRUNCATE);\n.quit\n"); err != nil {
+			writeErr = errors.Join(writeErr, err)
+		}
+		if err := s.in.Flush(); err != nil {
+			writeErr = errors.Join(writeErr, err)
+		}
+	}
+	if s.stdin != nil {
+		if err := s.stdin.Close(); err != nil {
+			writeErr = errors.Join(writeErr, err)
+		}
+	}
+	s.mu.Unlock()
+
+	done := make(chan error, 1)
+	go func() { done <- s.cmd.Wait() }()
+	var waitErr error
+	select {
+	case waitErr = <-done:
+	case <-time.After(sqliteCloseGrace):
+		_ = s.cmd.Process.Kill()
+		waitErr = <-done
+		waitErr = errors.Join(errors.New("sqlite3 close timed out"), waitErr)
+	}
+	if waitErr != nil {
+		waitErr = fmt.Errorf("sqlite3 failed: %w: %s", waitErr, strings.TrimSpace(string(s.stderr.Bytes())))
+	}
+	return errors.Join(writeErr, waitErr)
+}
+
+// LatestSessionDir returns the most recently modified session directory.
+func LatestSessionDir(base string) (string, error) {
+	entries, err := os.ReadDir(filepath.Join(base, "sessions"))
+	if err != nil {
+		return "", err
+	}
+	var latest string
+	var latestTime time.Time
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err == nil && info.ModTime().After(latestTime) {
+			latestTime = info.ModTime()
+			latest = filepath.Join(base, "sessions", entry.Name())
+		}
+	}
+	if latest == "" {
+		return "", errors.New("no sessions found")
+	}
+	return latest, nil
+}
+
+// ContextFlush periodically flushes buffers for crash resilience. Errors are
+// reported through onError when provided.
+func (s *SessionStore) ContextFlush(
+	ctx context.Context,
+	interval time.Duration,
+	onError func(error),
+) {
+	if interval <= 0 {
+		interval = 2 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := s.Flush(); err != nil && onError != nil {
+				onError(fmt.Errorf("flush session store: %w", err))
+			}
+		}
+	}
+}

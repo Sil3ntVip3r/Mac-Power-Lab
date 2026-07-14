@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://macpowerlab.local/contracts/v1/power_sample.schema.json",
+  "title": "macpowerlab.power_sample.v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "timestamp",
+    "session_id",
+    "sequence",
+    "battery",
+    "adapter",
+    "components",
+    "thermal"
+  ],
+  "properties": {
+    "schema": {
+      "const": "macpowerlab.power_sample.v1"
+    }
+  },
+  "additionalProperties": true
+}

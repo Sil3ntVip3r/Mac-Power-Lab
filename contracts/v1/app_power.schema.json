@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://macpowerlab.local/contracts/v1/app_power.schema.json",
+  "title": "macpowerlab.app_power.v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "timestamp",
+    "key",
+    "name",
+    "confidence",
+    "attribution_source"
+  ],
+  "properties": {
+    "schema": {
+      "const": "macpowerlab.app_power.v1"
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,14 @@
+goos: linux
+goarch: amd64
+pkg: github.com/Sil3ntVip3r/Mac-Power-Lab/internal/attribution
+cpu: AMD EPYC 9V74 80-Core Processor
+BenchmarkAttributorObserve200Processes-56    	    6175	    167574 ns/op	  151115 B/op	     213 allocs/op
+PASS
+ok  	github.com/Sil3ntVip3r/Mac-Power-Lab/internal/attribution	1.070s
+goos: linux
+goarch: amd64
+pkg: github.com/Sil3ntVip3r/Mac-Power-Lab/internal/collector
+cpu: AMD EPYC 9V74 80-Core Processor
+BenchmarkParsePowermetricsFixture-56    	  105807	     10600 ns/op	    4564 B/op	      59 allocs/op
+PASS
+ok  	github.com/Sil3ntVip3r/Mac-Power-Lab/internal/collector	1.254s

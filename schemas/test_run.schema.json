@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://macpowerlab.local/contracts/v1/test_run.schema.json",
+  "title": "macpowerlab.test_run.v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "id",
+    "session_id",
+    "name",
+    "plan",
+    "phase",
+    "status",
+    "started_at",
+    "requested_seconds"
+  ],
+  "properties": {
+    "schema": {
+      "const": "macpowerlab.test_run.v1"
+    }
+  },
+  "additionalProperties": true
+}

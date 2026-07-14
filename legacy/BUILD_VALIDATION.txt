@@ -1,0 +1,11 @@
+MacPowerLab v0.9.0 build validation
+
+- Python compileall: PASS
+- Unit/integration tests: 14 PASS
+- Main monitor CLI help: PASS
+- Standalone app-power fallback smoke test: PASS
+- App-power CSV schema integration: PASS
+- App report Markdown/HTML generation: PASS
+- Shell scripts parsed by bash -n as a secondary syntax check: PASS
+
+The target runtime is macOS zsh + Python 3.

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://macpowerlab.local/contracts/v1/status.schema.json",
+  "title": "macpowerlab.status.v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "version",
+    "monitor_running",
+    "benchmark"
+  ],
+  "properties": {
+    "schema": {
+      "const": "macpowerlab.status.v1"
+    }
+  },
+  "additionalProperties": true
+}

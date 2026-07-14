@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://macpowerlab.local/contracts/v1/parity_report.schema.json",
+  "title": "macpowerlab.parity_report.v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "created_at",
+    "iterations",
+    "passed",
+    "differences"
+  ],
+  "properties": {
+    "schema": {
+      "const": "macpowerlab.parity_report.v1"
+    }
+  },
+  "additionalProperties": true
+}

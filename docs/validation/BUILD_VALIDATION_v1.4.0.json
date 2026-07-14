@@ -1,0 +1,53 @@
+{
+  "name": "MacPowerLab",
+  "version": "1.4.0",
+  "review_target": "1.3.0",
+  "created_at": "2026-07-13T18:45:00Z",
+  "environment": {
+    "os": "linux",
+    "go": "1.23.2",
+    "notes": "Privileged macOS sensors, native Metal execution, code signing, and SwiftUI linking require on-Mac validation."
+  },
+  "baseline": {
+    "go_test": "passed",
+    "go_vet": "passed",
+    "go_test_race": "passed",
+    "statement_coverage_percent": 42.3
+  },
+  "refactor": {
+    "gofmt": "passed",
+    "go_test_all_packages": "passed",
+    "go_vet": "passed",
+    "go_test_race_all_packages": "passed",
+    "race_shuffle_20x_server_collector_benchmark_store": "passed",
+    "statement_coverage_percent": 47.3,
+    "go_mod_verify": "passed",
+    "darwin_arm64_cross_build": "passed",
+    "darwin_amd64_cross_build": "passed",
+    "linux_amd64_build_and_version_smoke": "passed",
+    "swift_source_parse": "passed"
+  },
+  "benchmarks": {
+    "attributor_200_processes": {
+      "ns_per_op": 167574,
+      "bytes_per_op": 151115,
+      "allocs_per_op": 213
+    },
+    "powermetrics_fixture_parse": {
+      "ns_per_op": 10600,
+      "bytes_per_op": 4564,
+      "allocs_per_op": 59
+    }
+  },
+  "skipped_unavailable_tools": [
+    "staticcheck",
+    "golangci-lint",
+    "govulncheck",
+    "gosec"
+  ],
+  "mac_live_validation": [
+    "./scripts/bootstrap_macos.sh",
+    "./scripts/validate_on_mac.sh",
+    "open ./dist/MacPowerLab.app"
+  ]
+}
