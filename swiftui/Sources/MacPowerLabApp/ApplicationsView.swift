@@ -64,7 +64,7 @@ struct ApplicationsView: View {
                 )
                 MonitorMetricCard(
                     title: "Dynamic App Load",
-                    value: MPLFormat.watts(attribution?.dynamicW),
+                    value: attributedWatts(attribution?.dynamicW),
                     subtitle: "Load allocated above baseline",
                     systemImage: "bolt.badge.clock"
                 )
@@ -131,7 +131,8 @@ struct ApplicationsView: View {
             Text(
                 "Estimated watts are confidence-labelled attribution values. "
                 + "Dynamic W represents app-caused load above baseline; Total W also "
-                + "includes a proportional share of platform baseline power."
+                + "includes a proportional share of platform baseline power. "
+                + "A displayed 0.00 W is a valid zero allocation; n/a means attribution is unavailable."
             )
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -146,7 +147,7 @@ struct ApplicationsView: View {
             Table(apps, sortOrder: $sortOrder) {
                 appNameColumn
                 TableColumn("Dynamic W", value: \.sortDynamicW) { app in
-                    Text(MPLFormat.watts(app.estimatedDynamicW)).monospacedDigit()
+                    Text(attributedWatts(app.estimatedDynamicW)).monospacedDigit()
                 }
                 .width(min: 90, ideal: 105)
                 TableColumn("Total W", value: \.sortTotalW) { app in
@@ -154,15 +155,15 @@ struct ApplicationsView: View {
                 }
                 .width(min: 90, ideal: 105)
                 TableColumn("CPU W", value: \.sortCPUW) { app in
-                    Text(MPLFormat.watts(app.estimatedCPUW)).monospacedDigit()
+                    Text(attributedWatts(app.estimatedCPUW)).monospacedDigit()
                 }
                 .width(min: 80, ideal: 95)
                 TableColumn("GPU W", value: \.sortGPUW) { app in
-                    Text(MPLFormat.watts(app.estimatedGPUW)).monospacedDigit()
+                    Text(attributedWatts(app.estimatedGPUW)).monospacedDigit()
                 }
                 .width(min: 80, ideal: 95)
                 TableColumn("Residual W", value: \.sortResidualW) { app in
-                    Text(MPLFormat.watts(app.estimatedResidualW)).monospacedDigit()
+                    Text(attributedWatts(app.estimatedResidualW)).monospacedDigit()
                 }
                 .width(min: 90, ideal: 105)
                 TableColumn("Energy Wh", value: \.sortEnergyWh) { app in
@@ -249,6 +250,13 @@ struct ApplicationsView: View {
             }
             .tableStyle(.inset(alternatesRowBackgrounds: true))
         }
+    }
+
+    private func attributedWatts(_ value: Double?) -> String {
+        guard attribution != nil else { return "n/a" }
+        // Go v1 contracts omit numeric zero values. Once attribution exists, a
+        // missing computed watt field therefore represents a real zero.
+        return MPLFormat.watts(value ?? 0)
     }
 
     private var appNameColumn: TableColumn<AppPower, KeyPathComparator<AppPower>, some View, Text> {
