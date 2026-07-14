@@ -75,7 +75,14 @@ actor APIClient {
     }
 
     func generateReport() async throws -> EngineStatus {
-        _ = try await requestData(path: "/report", method: "POST", body: Data("{}".utf8))
+        // Reports scan the full session history and can legitimately take longer
+        // than ordinary status/control requests on long monitoring sessions.
+        _ = try await requestData(
+            path: "/report",
+            method: "POST",
+            body: Data("{}".utf8),
+            timeout: 120
+        )
         return try await status()
     }
 
@@ -84,13 +91,18 @@ actor APIClient {
         return try decoder.decode(T.self, from: data)
     }
 
-    private func requestData(path: String, method: String, body: Data?) async throws -> Data {
+    private func requestData(
+        path: String,
+        method: String,
+        body: Data?,
+        timeout: TimeInterval = 15
+    ) async throws -> Data {
         guard let baseURL, let token else { throw ClientError.notConfigured }
         guard let url = URL(string: path, relativeTo: baseURL) else { throw ClientError.notConfigured }
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.httpBody = body
-        request.timeoutInterval = 15
+        request.timeoutInterval = timeout
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let (data, response) = try await URLSession.shared.data(for: request)
