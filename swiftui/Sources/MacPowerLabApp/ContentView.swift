@@ -72,10 +72,29 @@ struct ContentView: View {
                 }
                 .disabled(model.status == nil)
 
-                Button("Generate Report") {
+                Button {
                     model.generateReport()
+                } label: {
+                    if model.isGeneratingReport {
+                        Label("Generating…", systemImage: "doc.badge.clock")
+                    } else {
+                        Label("Generate Report", systemImage: "doc.text")
+                    }
                 }
-                .disabled(model.status?.session == nil)
+                .disabled(model.status?.session == nil || model.isGeneratingReport)
+
+                if model.latestReportURL != nil {
+                    Menu {
+                        Button("Open Latest Report") {
+                            model.openLatestReport()
+                        }
+                        Button("Show Report in Finder") {
+                            model.revealLatestReport()
+                        }
+                    } label: {
+                        Label("Report", systemImage: "doc.text.magnifyingglass")
+                    }
+                }
 
                 if model.status == nil {
                     Button("Connect") {
@@ -86,17 +105,46 @@ struct ContentView: View {
             }
         }
         .overlay(alignment: .bottom) {
-            if let message = model.errorMessage {
-                Text(message)
-                    .padding(10)
+            VStack(spacing: 8) {
+                if let message = model.reportMessage {
+                    HStack(spacing: 12) {
+                        Label(message, systemImage: "checkmark.circle.fill")
+                            .lineLimit(2)
+                            .textSelection(.enabled)
+                        Spacer()
+                        Button("Open") {
+                            model.openLatestReport()
+                        }
+                        Button("Show in Finder") {
+                            model.revealLatestReport()
+                        }
+                        Button {
+                            model.dismissReportMessage()
+                        } label: {
+                            Image(systemName: "xmark")
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(12)
                     .background(
-                        .red.opacity(0.92),
-                        in: RoundedRectangle(cornerRadius: 8)
+                        .green.opacity(0.92),
+                        in: RoundedRectangle(cornerRadius: 10)
                     )
                     .foregroundStyle(.white)
-                    .padding()
-                    .textSelection(.enabled)
+                }
+
+                if let message = model.errorMessage {
+                    Text(message)
+                        .padding(10)
+                        .background(
+                            .red.opacity(0.92),
+                            in: RoundedRectangle(cornerRadius: 8)
+                        )
+                        .foregroundStyle(.white)
+                        .textSelection(.enabled)
+                }
             }
+            .padding()
         }
         .task {
             if model.status == nil {
