@@ -2,6 +2,13 @@
 
 All notable changes to Mac Power Lab are documented here. Detailed historical notes are available in [`docs/releases`](docs/releases/).
 
+## [Unreleased]
+
+### Fixed
+- Made **Generate Report** visibly show progress, open the generated HTML report, and retain actions to reopen it or reveal it in Finder.
+- Added a longer report request timeout for large monitoring sessions and clear errors when the generated artifact cannot be found.
+- Displayed valid zero application-attribution values as `0.00 W` instead of `n/a` while preserving `n/a` for unavailable attribution.
+
 ## [1.4.0] - 2026-07-13
 
 ### Fixed
