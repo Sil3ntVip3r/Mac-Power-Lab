@@ -11,17 +11,19 @@ import (
 	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/benchmark"
 	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/config"
 	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/model"
+	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/store"
 )
 
 type fakeEngineMonitor struct {
-	mu       sync.Mutex
-	startErr error
-	started  int
-	stopped  int
-	phase    string
-	sample   *model.PowerSample
-	session  model.Session
-	dir      string
+	mu           sync.Mutex
+	startErr     error
+	started      int
+	stopped      int
+	phase        string
+	sample       *model.PowerSample
+	session      model.Session
+	dir          string
+	sessionStore *store.SessionStore
 }
 
 func (f *fakeEngineMonitor) Start(context.Context, map[string]string) error {
@@ -53,6 +55,12 @@ func (f *fakeEngineMonitor) SetPhase(value string) {
 	f.mu.Unlock()
 }
 func (f *fakeEngineMonitor) WriteTestRun(model.TestRun) error { return nil }
+func (f *fakeEngineMonitor) Snapshot() (store.SessionSnapshot, error) {
+	if f.sessionStore != nil {
+		return f.sessionStore.Snapshot()
+	}
+	return store.SnapshotDir(f.dir)
+}
 
 type fakeEngineBenchmark struct {
 	runs    atomic.Int64
@@ -230,6 +238,56 @@ func TestCompletedRunCannotClearNewBenchmark(t *testing.T) {
 	}
 	if err := engine.StopBenchmark(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestEngineGenerateReportCreatesCumulativeArtifacts(t *testing.T) {
+	base := t.TempDir()
+	session := model.Session{ID: "report-session", StartedAt: time.Now()}
+	st, err := store.NewSession(base, session, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	fake := &fakeEngineMonitor{
+		sample:       &model.PowerSample{},
+		session:      st.Session,
+		dir:          st.Dir,
+		sessionStore: st,
+	}
+	engine := newEngine(
+		config.Default(),
+		testEngineDependencies(func() (monitor, error) { return fake, nil }, newFakeEngineBenchmark()),
+	)
+	if err := engine.StartMonitor(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	write := func(sequence uint64) {
+		t.Helper()
+		if err := st.WriteSample(model.PowerSample{
+			Timestamp: time.Now().Add(time.Duration(sequence) * time.Second),
+			SessionID: session.ID,
+			Sequence:  sequence,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(1)
+	first, err := engine.GenerateReport(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(2)
+	second, err := engine.GenerateReport(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.HTMLPath == second.HTMLPath {
+		t.Fatal("report generation overwrote the first artifact")
+	}
+	if first.Summary.SampleCount != 1 || second.Summary.SampleCount != 2 {
+		t.Fatalf("sample counts first=%d second=%d", first.Summary.SampleCount, second.Summary.SampleCount)
 	}
 }
 

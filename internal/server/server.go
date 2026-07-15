@@ -39,6 +39,7 @@ type monitor interface {
 	benchmark.Monitor
 	Start(context.Context, map[string]string) error
 	Stop(context.Context) error
+	Snapshot() (store.SessionSnapshot, error)
 }
 
 type benchmarkRunner interface {
@@ -80,6 +81,7 @@ type Engine struct {
 	deps engineDependencies
 
 	lifecycle sync.Mutex
+	reportMu  sync.Mutex
 	mu        sync.RWMutex
 	rootCtx   context.Context
 
@@ -340,6 +342,54 @@ func (e *Engine) Status() model.Status {
 	return status
 }
 
+// GenerateReport captures a cumulative byte-boundary snapshot and writes a new
+// immutable timestamped artifact. Reports are serialized so latest.json always
+// points to the newest completed artifact.
+func (e *Engine) GenerateReport(ctx context.Context) (report.Artifact, error) {
+	if ctx == nil {
+		return report.Artifact{}, errors.New("report context must not be nil")
+	}
+	e.reportMu.Lock()
+	defer e.reportMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return report.Artifact{}, err
+	}
+
+	e.mu.RLock()
+	manager := e.manager
+	directory := e.lastSession
+	e.mu.RUnlock()
+
+	var (
+		snapshot store.SessionSnapshot
+		err      error
+	)
+	if manager != nil {
+		snapshot, err = manager.Snapshot()
+	} else {
+		if directory == "" {
+			directory, err = store.LatestSessionDir(e.cfg.DataDir)
+		}
+		if err == nil {
+			snapshot, err = store.SnapshotDir(directory)
+		}
+	}
+	if err != nil {
+		return report.Artifact{}, fmt.Errorf("capture report snapshot: %w", err)
+	}
+	return report.GenerateSnapshot(snapshot)
+}
+
+// LatestReport returns the newest completed artifact for the current or most
+// recent session.
+func (e *Engine) LatestReport() (report.Artifact, error) {
+	directory := e.LastSessionDir()
+	if directory == "" {
+		return report.Artifact{}, os.ErrNotExist
+	}
+	return report.Latest(directory)
+}
+
 func (e *Engine) LastSessionDir() string {
 	e.mu.RLock()
 	manager := e.manager
@@ -569,25 +619,36 @@ func Serve(ctx context.Context, addr, tokenFile string, engine *Engine, autoMoni
 		}
 		writeJSON(w, http.StatusOK, engine.Status())
 	}))
-	mux.HandleFunc("POST /report", auth(func(w http.ResponseWriter, _ *http.Request) {
-		directory := engine.LastSessionDir()
-		if directory == "" {
-			http.Error(w, "no session", http.StatusNotFound)
-			return
-		}
-		summary, err := report.Generate(directory)
+	mux.HandleFunc("POST /report", auth(func(w http.ResponseWriter, r *http.Request) {
+		artifact, err := engine.GenerateReport(r.Context())
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			status := http.StatusInternalServerError
+			if errors.Is(err, os.ErrNotExist) {
+				status = http.StatusNotFound
+			}
+			http.Error(w, err.Error(), status)
 			return
 		}
-		writeJSON(w, http.StatusOK, summary)
+		writeJSON(w, http.StatusOK, artifact)
+	}))
+	mux.HandleFunc("GET /report/latest", auth(func(w http.ResponseWriter, _ *http.Request) {
+		artifact, err := engine.LatestReport()
+		if err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, os.ErrNotExist) {
+				status = http.StatusNotFound
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+		writeJSON(w, http.StatusOK, artifact)
 	}))
 
 	server := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      30 * time.Second,
+		WriteTimeout:      130 * time.Second,
 		IdleTimeout:       30 * time.Second,
 		MaxHeaderBytes:    16 << 10,
 	}

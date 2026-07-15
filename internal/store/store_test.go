@@ -109,3 +109,48 @@ func TestSQLiteMirrorDisablesAfterFirstRuntimeFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSessionSnapshotPinsJSONLByteBoundary(t *testing.T) {
+	st, err := NewSession(t.TempDir(), model.Session{ID: "snapshot", StartedAt: time.Now()}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	if err := st.WriteSample(model.PowerSample{SessionID: "snapshot", Sequence: 1, Timestamp: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := st.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteSample(model.PowerSample{SessionID: "snapshot", Sequence: 2, Timestamp: time.Now().Add(time.Second)}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := st.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	count := func(snapshot SessionSnapshot) int {
+		t.Helper()
+		limit, ok := snapshot.Limit("samples.jsonl")
+		if !ok {
+			t.Fatal("samples limit missing")
+		}
+		seen := 0
+		if err := ReadJSONLPrefix[model.PowerSample](filepath.Join(snapshot.Dir, "samples.jsonl"), limit, func(model.PowerSample) error {
+			seen++
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return seen
+	}
+	if got := count(first); got != 1 {
+		t.Fatalf("first snapshot records=%d want=1", got)
+	}
+	if got := count(second); got != 2 {
+		t.Fatalf("second snapshot records=%d want=2", got)
+	}
+}

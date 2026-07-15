@@ -74,20 +74,37 @@ actor APIClient {
         try await request(path: "/benchmark/stop", method: "POST", body: Data("{}".utf8))
     }
 
-    func generateReport() async throws -> EngineStatus {
+    func generateReport() async throws -> ReportArtifact {
         // Reports scan the full session history and can legitimately take longer
         // than ordinary status/control requests on long monitoring sessions.
-        _ = try await requestData(
+        try await request(
             path: "/report",
             method: "POST",
             body: Data("{}".utf8),
             timeout: 120
         )
-        return try await status()
     }
 
-    private func request<T: Decodable>(path: String, method: String, body: Data?) async throws -> T {
-        let data = try await requestData(path: path, method: method, body: body)
+    func latestReport() async throws -> ReportArtifact {
+        try await request(
+            path: "/report/latest",
+            method: "GET",
+            body: Optional<Data>.none
+        )
+    }
+
+    private func request<T: Decodable>(
+        path: String,
+        method: String,
+        body: Data?,
+        timeout: TimeInterval = 15
+    ) async throws -> T {
+        let data = try await requestData(
+            path: path,
+            method: method,
+            body: body,
+            timeout: timeout
+        )
         return try decoder.decode(T.self, from: data)
     }
 

@@ -21,7 +21,7 @@ func TestContractManifest(t *testing.T) {
 	if err = json.Unmarshal(raw, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if len(manifest.Contracts) != 8 {
+	if len(manifest.Contracts) != 9 {
 		t.Fatalf("contracts=%d", len(manifest.Contracts))
 	}
 	seen := map[string]bool{}

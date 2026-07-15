@@ -42,6 +42,21 @@ type SessionStore struct {
 	closed  bool
 }
 
+// SessionSnapshot is an immutable byte-range view of one session at a precise
+// capture time. JSONL files may continue growing after capture; Limits ensures
+// report readers never consume records written after the snapshot boundary.
+type SessionSnapshot struct {
+	Dir        string
+	CapturedAt time.Time
+	Limits     map[string]int64
+}
+
+// Limit returns the captured byte length for a canonical session file.
+func (snapshot SessionSnapshot) Limit(name string) (int64, bool) {
+	limit, ok := snapshot.Limits[name]
+	return limit, ok
+}
+
 type jsonlWriter struct {
 	file *os.File
 	buf  *bufio.Writer
@@ -257,6 +272,64 @@ func (s *SessionStore) disableSQLiteLocked(operation string, cause error) error 
 	}
 }
 
+// Snapshot flushes canonical JSONL writers and captures byte boundaries while
+// holding the store mutex. The monitor may resume writing immediately afterward;
+// report readers remain pinned to these limits and therefore see a consistent,
+// cumulative view through CapturedAt without pausing collection for the full
+// report-generation duration.
+func (s *SessionStore) Snapshot() (SessionSnapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.closed {
+		if err := errors.Join(
+			s.samples.flush(),
+			s.apps.flush(),
+			s.events.flush(),
+			s.tests.flush(),
+		); err != nil {
+			return SessionSnapshot{}, fmt.Errorf("flush session snapshot: %w", err)
+		}
+	}
+	return snapshotDir(s.Dir, time.Now())
+}
+
+// SnapshotDir captures an already-closed or externally selected session.
+func SnapshotDir(dir string) (SessionSnapshot, error) {
+	return snapshotDir(dir, time.Now())
+}
+
+func snapshotDir(dir string, capturedAt time.Time) (SessionSnapshot, error) {
+	dir = filepath.Clean(strings.TrimSpace(dir))
+	if dir == "." || dir == "" {
+		return SessionSnapshot{}, errors.New("session snapshot directory is required")
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		return SessionSnapshot{}, err
+	}
+	if !info.IsDir() {
+		return SessionSnapshot{}, errors.New("session snapshot path must be a directory")
+	}
+
+	limits := make(map[string]int64, 4)
+	for _, name := range []string{"samples.jsonl", "apps.jsonl", "events.jsonl", "test_runs.jsonl"} {
+		fileInfo, statErr := os.Stat(filepath.Join(dir, name))
+		switch {
+		case statErr == nil:
+			if !fileInfo.Mode().IsRegular() {
+				return SessionSnapshot{}, fmt.Errorf("snapshot source is not a regular file: %s", name)
+			}
+			limits[name] = fileInfo.Size()
+		case errors.Is(statErr, os.ErrNotExist):
+			continue
+		default:
+			return SessionSnapshot{}, fmt.Errorf("stat snapshot source %s: %w", name, statErr)
+		}
+	}
+	return SessionSnapshot{Dir: dir, CapturedAt: capturedAt, Limits: limits}, nil
+}
+
 // Flush persists all buffered data without closing the session.
 func (s *SessionStore) Flush() error {
 	s.mu.Lock()
@@ -336,8 +409,16 @@ func atomicJSON(path string, v any) error {
 	return os.Rename(tmpPath, path)
 }
 
-// ReadJSONL streams a JSONL file one object at a time without unbounded memory.
+// ReadJSONL streams a complete JSONL file one object at a time without
+// unbounded memory.
 func ReadJSONL[T any](path string, fn func(T) error) error {
+	return ReadJSONLPrefix(path, -1, fn)
+}
+
+// ReadJSONLPrefix reads at most limit bytes. A non-negative limit should come
+// from SessionSnapshot and is guaranteed to end at a flushed record boundary.
+// Passing -1 reads the complete file.
+func ReadJSONLPrefix[T any](path string, limit int64, fn func(T) error) error {
 	if fn == nil {
 		return errors.New("JSONL callback is required")
 	}
@@ -346,7 +427,12 @@ func ReadJSONL[T any](path string, fn func(T) error) error {
 		return err
 	}
 	defer f.Close()
-	scanner := bufio.NewScanner(f)
+
+	var reader io.Reader = f
+	if limit >= 0 {
+		reader = io.LimitReader(f, limit)
+	}
+	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64<<10), scannerMaxRecord)
 	line := 0
 	for scanner.Scan() {

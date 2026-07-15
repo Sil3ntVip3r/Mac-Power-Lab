@@ -30,17 +30,21 @@ func TestGenerate(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := filepath.Join(base, "sessions", "test")
-	summary, err := Generate(dir)
+	artifact, err := Generate(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
+	summary := artifact.Summary
 	if summary.SampleCount != 3 || summary.PeakPrimaryLoadW != 42 {
 		t.Fatalf("summary=%+v", summary)
 	}
-	for _, name := range []string{"summary.json", "report.md", "report.html"} {
-		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+	for _, path := range []string{artifact.SummaryPath, artifact.MarkdownPath, artifact.HTMLPath, filepath.Join(artifact.Directory, "artifact.json")} {
+		if _, err := os.Stat(path); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if filepath.Dir(artifact.Directory) != filepath.Join(dir, reportsDirectoryName) {
+		t.Fatalf("artifact directory=%q", artifact.Directory)
 	}
 }
 
@@ -76,10 +80,11 @@ func TestGenerateUsesTimeWeightedAverageAndDeduplicatesRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	summary, err := Generate(filepath.Join(base, "sessions", session.ID))
+	artifact, err := Generate(filepath.Join(base, "sessions", session.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
+	summary := artifact.Summary
 	wantAverage := (10.0*1 + 20.0*8) / 9
 	if math.Abs(summary.AveragePrimaryLoadW-wantAverage) > 0.001 {
 		t.Fatalf("average=%.4f want=%.4f", summary.AveragePrimaryLoadW, wantAverage)
@@ -108,15 +113,86 @@ func TestGenerateSkipsSleepSizedIntegrationGap(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	summary, err := Generate(filepath.Join(base, "sessions", session.ID))
+	artifact, err := Generate(filepath.Join(base, "sessions", session.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
+	summary := artifact.Summary
 	if summary.EnergyDischargedWh != 0 {
 		t.Fatalf("sleep gap was integrated: %.3f Wh", summary.EnergyDischargedWh)
 	}
 	if len(summary.Warnings) == 0 {
 		t.Fatal("expected integration-gap warning")
+	}
+}
+
+func TestGenerateCreatesImmutableCumulativeSnapshots(t *testing.T) {
+	base := t.TempDir()
+	started := time.Unix(1_700_000_000, 0)
+	session := model.Session{Schema: version.SessionSchema, ID: "cumulative", Version: version.Version, StartedAt: started}
+	st, err := store.NewSession(base, session, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	writeSample := func(sequence uint64, load float64) {
+		t.Helper()
+		if err := st.WriteSample(model.PowerSample{
+			Schema:       version.PowerSampleSchema,
+			Timestamp:    started.Add(time.Duration(sequence-1) * time.Minute),
+			SessionID:    session.ID,
+			Sequence:     sequence,
+			PrimaryLoadW: load,
+			Battery:      model.BatterySample{NetWatts: -load},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	writeSample(1, 10)
+	firstSnapshot, err := st.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := GenerateSnapshot(firstSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstHTML, err := os.ReadFile(first.HTMLPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writeSample(2, 20)
+	secondSnapshot, err := st.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := GenerateSnapshot(secondSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if first.Directory == second.Directory || first.HTMLPath == second.HTMLPath {
+		t.Fatalf("reports were overwritten: first=%q second=%q", first.Directory, second.Directory)
+	}
+	if first.Summary.SampleCount != 1 || second.Summary.SampleCount != 2 {
+		t.Fatalf("cumulative counts first=%d second=%d", first.Summary.SampleCount, second.Summary.SampleCount)
+	}
+	unchanged, err := os.ReadFile(first.HTMLPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(unchanged) != string(firstHTML) {
+		t.Fatal("first report changed after generating the second report")
+	}
+	latest, err := Latest(filepath.Join(base, "sessions", session.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest.HTMLPath != second.HTMLPath {
+		t.Fatalf("latest=%q want=%q", latest.HTMLPath, second.HTMLPath)
 	}
 }
 
@@ -158,10 +234,11 @@ func TestGenerateIncludesCollectorErrorEvents(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	summary, err := Generate(filepath.Join(base, "sessions", session.ID))
+	artifact, err := Generate(filepath.Join(base, "sessions", session.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
+	summary := artifact.Summary
 	found := false
 	for _, warning := range summary.Warnings {
 		if warning == "collector_error: powermetrics restarted" {

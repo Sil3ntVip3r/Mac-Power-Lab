@@ -559,6 +559,18 @@ func (m *Manager) SessionDir() string {
 	}
 	return m.store.Dir
 }
+
+// Snapshot returns a consistent cumulative view of the session through a
+// precise byte boundary while monitoring continues.
+func (m *Manager) Snapshot() (store.SessionSnapshot, error) {
+	m.mu.RLock()
+	st := m.store
+	m.mu.RUnlock()
+	if st == nil {
+		return store.SessionSnapshot{}, errors.New("session store unavailable")
+	}
+	return st.Snapshot()
+}
 func (m *Manager) WriteTestRun(v model.TestRun) error {
 	m.mu.RLock()
 	st := m.store

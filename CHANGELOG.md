@@ -5,6 +5,9 @@ All notable changes to Mac Power Lab are documented here. Detailed historical no
 ## [Unreleased]
 
 ### Fixed
+- Corrected Apple Silicon `powermetrics` CPU, GPU, package, ANE, DRAM, and cluster power fields from milliwatts to watts using explicit source units.
+- Treated an empty optional `AppleSmartBatteryBank` result as not present instead of producing a repeated parse warning.
+- Generated immutable timestamped report snapshots that remain cumulative from session start and preserve every earlier report.
 - Made **Generate Report** visibly show progress, open the generated HTML report, and retain actions to reopen it or reveal it in Finder.
 - Added a longer report request timeout for large monitoring sessions and clear errors when the generated artifact cannot be found.
 - Displayed valid zero application-attribution values as `0.00 W` instead of `n/a` while preserving `n/a` for unavailable attribution.

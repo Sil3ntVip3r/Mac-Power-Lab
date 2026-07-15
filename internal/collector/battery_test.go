@@ -68,3 +68,19 @@ func TestPMSetDischargingIsNotCharging(t *testing.T) {
 		t.Fatal("charged battery is not actively charging")
 	}
 }
+
+func TestParseOptionalBatteryBanksTreatsEmptyOutputAsAbsent(t *testing.T) {
+	banks, status, err := parseOptionalBatteryBanks(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != "not-present" || len(banks) != 0 {
+		t.Fatalf("status=%q banks=%v", status, banks)
+	}
+}
+
+func TestParseOptionalBatteryBanksRejectsMalformedOutput(t *testing.T) {
+	if _, status, err := parseOptionalBatteryBanks([]byte("not a plist")); err == nil || status != "invalid" {
+		t.Fatalf("status=%q err=%v", status, err)
+	}
+}

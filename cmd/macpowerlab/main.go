@@ -361,11 +361,19 @@ func runReport(args []string) error {
 			return err
 		}
 	}
-	summary, err := report.Generate(dir)
+	artifact, err := report.Generate(dir)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Report: %s\nPeak load: %.2f W; discharged: %.2f Wh; top apps: %d\n", filepath.Join(dir, "report.html"), summary.PeakPrimaryLoadW, summary.EnergyDischargedWh, len(summary.TopApps))
+	summary := artifact.Summary
+	fmt.Printf(
+		"Report: %s\nData through: %s\nPeak load: %.2f W; discharged: %.2f Wh; top apps: %d\n",
+		artifact.HTMLPath,
+		artifact.DataThrough.Format(time.RFC3339),
+		summary.PeakPrimaryLoadW,
+		summary.EnergyDischargedWh,
+		len(summary.TopApps),
+	)
 	return nil
 }
 
