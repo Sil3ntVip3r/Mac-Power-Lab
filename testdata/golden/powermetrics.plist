@@ -4,10 +4,11 @@
 <key>elapsed_ns</key><integer>2000000000</integer>
 <key>thermal_pressure</key><string>Nominal</string>
 <key>processor</key><dict>
-  <key>cpu_power</key><real>18.5</real>
-  <key>gpu_power</key><real>12.25</real>
-  <key>ane_power</key><real>1.5</real>
-  <key>dram_power</key><real>3.75</real>
+  <key>cpu_power</key><real>18500</real>
+  <key>gpu_power</key><real>12250</real>
+  <key>ane_power</key><real>1500</real>
+  <key>dram_power</key><real>3750</real>
+  <key>combined_power</key><real>36000</real>
   <key>gpu_freq_hz</key><integer>900000000</integer>
   <key>clusters</key><array>
     <dict><key>name</key><string>E</string><key>freq_hz</key><integer>1800000000</integer><key>idle_ns</key><integer>400000000</integer></dict>

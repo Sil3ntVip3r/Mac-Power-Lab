@@ -3,15 +3,12 @@ import Foundation
 import SwiftUI
 
 private enum ReportPresentationError: LocalizedError {
-    case sessionDirectoryUnavailable
     case artifactMissing(String)
 
     var errorDescription: String? {
         switch self {
-        case .sessionDirectoryUnavailable:
-            return "The report was generated, but the session directory was not returned by the backend."
         case .artifactMissing(let path):
-            return "The backend completed report generation, but report.html was not found at \(path)."
+            return "The backend completed report generation, but the timestamped HTML report was not found at \(path)."
         }
     }
 }
@@ -77,6 +74,9 @@ final class AppModel: ObservableObject {
                     benchmarkCatalog = catalog
                 }
                 applyBenchmarkDefaults(selectedBenchmark)
+                if let artifact = try? await api.latestReport() {
+                    latestReportURL = URL(fileURLWithPath: artifact.htmlPath)
+                }
                 startPolling()
             } catch {
                 errorMessage = error.localizedDescription
@@ -166,31 +166,23 @@ final class AppModel: ObservableObject {
         Task {
             defer { isGeneratingReport = false }
             do {
-                let updatedStatus = try await api.generateReport()
-                guard let directory = updatedStatus.session?.dataDirectory else {
-                    throw ReportPresentationError.sessionDirectoryUnavailable
-                }
-
-                let reportURL = URL(
-                    fileURLWithPath: directory,
-                    isDirectory: true
-                )
-                .appendingPathComponent("report.html", isDirectory: false)
-
+                let artifact = try await api.generateReport()
+                let reportURL = URL(fileURLWithPath: artifact.htmlPath)
                 guard FileManager.default.fileExists(atPath: reportURL.path) else {
                     throw ReportPresentationError.artifactMissing(reportURL.path)
                 }
 
-                status = updatedStatus
+                status = try await api.status()
                 latestReportURL = reportURL
-                reportMessage = "Report generated: \(reportURL.path)"
+                let cutoff = artifact.dataThrough.formatted(
+                    date: .abbreviated,
+                    time: .standard
+                )
+                reportMessage = "Cumulative report through \(cutoff): \(reportURL.path)"
 
-                // The backend has always generated the report correctly; the old
-                // UI discarded the successful result. Open the artifact immediately
-                // so the toolbar action has visible behavior.
                 if !NSWorkspace.shared.open(reportURL) {
                     NSWorkspace.shared.activateFileViewerSelecting([reportURL])
-                    reportMessage = "Report generated and revealed in Finder: \(reportURL.path)"
+                    reportMessage = "Cumulative report generated and revealed in Finder: \(reportURL.path)"
                 }
             } catch {
                 errorMessage = error.localizedDescription

@@ -3,6 +3,7 @@ package collector
 import (
 	"bufio"
 	"context"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -28,7 +29,9 @@ func TestParsePowermetrics(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := ParsePowermetrics(value.(map[string]any))
-	if s.Components.CPUWatts != 18.5 || s.Components.GPUWatts != 12.25 {
+	if s.Components.CPUWatts != 18.5 ||
+		s.Components.GPUWatts != 12.25 ||
+		s.Components.PackageWatts != 36 {
 		t.Fatalf("components=%+v", s.Components)
 	}
 	if len(s.Components.Clusters) != 2 {
@@ -97,6 +100,49 @@ func TestParseActivitiesNormalizesTotalsByElapsedTime(t *testing.T) {
 		activity.NetworkReadBytesPerS != 2000 ||
 		activity.CPUTimeMSPerS != 250 {
 		t.Fatalf("activity=%+v", activity)
+	}
+}
+
+func TestParsePowermetricsUsesExplicitMilliwattUnits(t *testing.T) {
+	root := map[string]any{
+		"elapsed_ns": float64(5_000_000_000),
+		"processor": map[string]any{
+			"cpu_power":      float64(901.32),
+			"gpu_power":      float64(162.35),
+			"combined_power": float64(1063.66),
+			"clusters": []any{
+				map[string]any{"name": "E", "power": float64(2500)},
+			},
+		},
+	}
+	snapshot := ParsePowermetrics(root)
+	assertClose := func(name string, got, want float64) {
+		t.Helper()
+		if math.Abs(got-want) > 1e-9 {
+			t.Fatalf("%s=%v want=%v", name, got, want)
+		}
+	}
+	assertClose("CPU", snapshot.Components.CPUWatts, 0.90132)
+	assertClose("GPU", snapshot.Components.GPUWatts, 0.16235)
+	assertClose("package", snapshot.Components.PackageWatts, 1.06366)
+	if len(snapshot.Components.Clusters) != 1 {
+		t.Fatalf("clusters=%+v", snapshot.Components.Clusters)
+	}
+	assertClose("cluster", snapshot.Components.Clusters[0].PowerWatts, 2.5)
+}
+
+func TestComponentPowerUsesMillijouleEnergyFallback(t *testing.T) {
+	// 628 mJ over 504 ms is approximately 1.246 W, matching the raw
+	// powermetrics cpu_power value from a real Apple Silicon sample.
+	got := componentPower(
+		map[string]any{"cpu_energy": float64(628)},
+		0.504191708,
+		"cpu_power",
+		"cpu_energy",
+	)
+	want := 0.628 / 0.504191708
+	if math.Abs(got-want) > 1e-9 {
+		t.Fatalf("power=%v want=%v", got, want)
 	}
 }
 

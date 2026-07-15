@@ -87,7 +87,8 @@ func TestReportGenerationUXIsVisibleAndActionable(t *testing.T) {
 	for _, required := range []string{
 		"isGeneratingReport",
 		"latestReportURL",
-		"report.html",
+		"artifact.htmlPath",
+		"artifact.dataThrough",
 		"NSWorkspace.shared.open",
 		"activateFileViewerSelecting",
 		"guard !isGeneratingReport else { return }",
@@ -108,8 +109,10 @@ func TestReportGenerationUXIsVisibleAndActionable(t *testing.T) {
 		}
 	}
 
-	if !strings.Contains(client, "timeout: 120") {
-		t.Fatal("report generation must use the extended request timeout")
+	for _, required := range []string{"timeout: 120", "/report/latest", "ReportArtifact"} {
+		if !strings.Contains(client, required) {
+			t.Fatalf("APIClient missing timestamped report behavior %q", required)
+		}
 	}
 }
 

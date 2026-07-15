@@ -2,6 +2,7 @@
 package collector
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -120,16 +121,14 @@ func (BatteryCollector) CollectDetailed(ctx context.Context) (BatterySnapshot, e
 			"AppleSmartBatteryBank unavailable: "+shortError(bankOutcome.err),
 		)
 	} else {
-		value, parseErr := plistx.Parse(bankOutcome.result.Stdout)
+		var parseErr error
+		banks, snapshot.Diagnostics.Status["apple_smart_battery_bank"], parseErr =
+			parseOptionalBatteryBanks(bankOutcome.result.Stdout)
 		if parseErr != nil {
-			snapshot.Diagnostics.Status["apple_smart_battery_bank"] = "invalid"
 			snapshot.Diagnostics.Warnings = append(
 				snapshot.Diagnostics.Warnings,
 				"AppleSmartBatteryBank parse failed: "+shortError(parseErr),
 			)
-		} else {
-			banks = asSlice(value)
-			snapshot.Diagnostics.Status["apple_smart_battery_bank"] = "ok"
 		}
 	}
 
@@ -147,6 +146,20 @@ func (BatteryCollector) CollectDetailed(ctx context.Context) (BatterySnapshot, e
 
 	snapshot.Battery, snapshot.Adapter = parseBatteryData(root, banks, pmset, now)
 	return snapshot, nil
+}
+
+func parseOptionalBatteryBanks(data []byte) ([]any, string, error) {
+	if len(bytes.TrimSpace(data)) == 0 {
+		// Some Macs do not expose AppleSmartBatteryBank. ioreg exits successfully
+		// with empty stdout in that case; absence is not a parse failure and must
+		// not generate one warning per sample.
+		return nil, "not-present", nil
+	}
+	value, err := plistx.Parse(data)
+	if err != nil {
+		return nil, "invalid", err
+	}
+	return asSlice(value), "ok", nil
 }
 
 func parseBatteryRoot(data []byte) (map[string]any, error) {
@@ -383,18 +396,4 @@ func shortError(err error) string {
 		return message[:maximum] + "…"
 	}
 	return message
-}
-
-// normalizePower converts powermetrics-style power fields that may be reported
-// in milliwatts on some macOS versions. Source-specific battery and adapter
-// fields use explicit unit conversion above and must not call this helper.
-func normalizePower(value any) float64 {
-	watts, ok := number(value)
-	if !ok {
-		return 0
-	}
-	if math.Abs(watts) > 1000 {
-		return watts / 1000
-	}
-	return watts
 }

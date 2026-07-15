@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://macpowerlab.local/contracts/v1/report_artifact.schema.json",
+  "title": "macpowerlab.report_artifact.v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "generated_at",
+    "data_through",
+    "session_id",
+    "directory",
+    "summary_path",
+    "markdown_path",
+    "html_path",
+    "summary"
+  ],
+  "properties": {
+    "schema": {
+      "const": "macpowerlab.report_artifact.v1"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "data_through": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "directory": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "markdown_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "html_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": false
+}

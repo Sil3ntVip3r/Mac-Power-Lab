@@ -30,6 +30,10 @@
       "schema": "macpowerlab.session_summary.v1"
     },
     {
+      "file": "report_artifact.schema.json",
+      "schema": "macpowerlab.report_artifact.v1"
+    },
+    {
       "file": "parity_report.schema.json",
       "schema": "macpowerlab.parity_report.v1"
     }

@@ -222,6 +222,10 @@ func ParsePowermetrics(root map[string]any) PowermetricsSnapshot {
 	snapshot.Components.ANEWatts = componentPower(processor, elapsedS, "ane_power", "ane_energy")
 	snapshot.Components.DRAMWatts = componentPower(processor, elapsedS, "dram_power", "dram_energy")
 	snapshot.Components.PackageWatts = componentPower(processor, elapsedS, "package_power", "package_energy")
+	if snapshot.Components.PackageWatts == 0 {
+		// Apple Silicon commonly reports the package subtotal as combined_power.
+		snapshot.Components.PackageWatts = componentPower(processor, elapsedS, "combined_power", "combined_energy")
+	}
 	snapshot.Components.GPUMHz = frequencyMHzFromMap(
 		processor,
 		[]string{"gpu_frequency_mhz"},
@@ -251,7 +255,10 @@ func ParsePowermetrics(root map[string]any) PowermetricsSnapshot {
 				active = math.Max(0, math.Min(100, (1-idleNS/elapsedNS)*100))
 			}
 		}
-		power := normalizePower(direct(clusterMap, "power"))
+		power := nonnegativeFinite(direct(clusterMap, "power_w"))
+		if power == 0 {
+			power = powermetricsMilliwatts(direct(clusterMap, "power"))
+		}
 		snapshot.Components.Clusters = append(
 			snapshot.Components.Clusters,
 			model.ClusterSample{
@@ -570,23 +577,43 @@ func activityWeight(activity model.ProcessActivity) float64 {
 }
 
 func componentPower(root map[string]any, elapsedS float64, powerKey, energyKey string) float64 {
-	if value := direct(root, powerKey); value != nil {
-		return normalizePower(value)
+	// powermetrics plist uses milliwatts for unqualified *_power fields. Keep
+	// explicit *_power_w support for a future or alternate source that already
+	// reports watts; never infer the unit from magnitude.
+	if value := direct(root, powerKey+"_w"); value != nil {
+		return nonnegativeFinite(value)
 	}
-	energy := asFloat(direct(root, energyKey))
-	if energy == 0 || elapsedS <= 0 {
+	if value := direct(root, powerKey); value != nil {
+		return powermetricsMilliwatts(value)
+	}
+	if elapsedS <= 0 {
 		return 0
 	}
-	switch {
-	case energy > 1e9:
-		return energy / 1e9 / elapsedS
-	case energy > 1e6:
-		return energy / 1e6 / elapsedS
-	case energy > 1e3:
-		return energy / 1e3 / elapsedS
-	default:
-		return energy / elapsedS
+	if value := direct(root, energyKey+"_j"); value != nil {
+		return nonnegativeFinite(value) / elapsedS
 	}
+	// Unqualified *_energy fields are millijoules. Dividing mJ by seconds
+	// yields mW, so convert to joules before calculating watts.
+	if value := direct(root, energyKey); value != nil {
+		return powermetricsMillijoules(value) / elapsedS
+	}
+	return 0
+}
+
+func powermetricsMilliwatts(value any) float64 {
+	return nonnegativeFinite(value) / 1000
+}
+
+func powermetricsMillijoules(value any) float64 {
+	return nonnegativeFinite(value) / 1000
+}
+
+func nonnegativeFinite(value any) float64 {
+	n, ok := number(value)
+	if !ok || n <= 0 {
+		return 0
+	}
+	return n
 }
 
 func frequencyMHzFromMap(

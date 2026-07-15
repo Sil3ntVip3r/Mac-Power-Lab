@@ -328,6 +328,27 @@ struct BenchmarkProgress: Codable {
     }
 }
 
+struct ReportArtifact: Codable {
+    let schema: String?
+    let generatedAt: Date
+    let dataThrough: Date
+    let sessionID: String
+    let directory: String
+    let summaryPath: String
+    let markdownPath: String
+    let htmlPath: String
+
+    enum CodingKeys: String, CodingKey {
+        case schema, directory
+        case generatedAt = "generated_at"
+        case dataThrough = "data_through"
+        case sessionID = "session_id"
+        case summaryPath = "summary_path"
+        case markdownPath = "markdown_path"
+        case htmlPath = "html_path"
+    }
+}
+
 struct EngineStatus: Codable {
     let version: String
     let monitorRunning: Bool

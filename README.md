@@ -85,6 +85,11 @@ The bootstrap removes quarantine only from this project directory, builds and ad
   --power-source battery
 ```
 
+
+## Cumulative report snapshots
+
+Generating a report does not stop monitoring and does not overwrite an earlier report. Each request flushes the current session, captures a consistent data boundary, and writes a timestamped HTML, Markdown, and JSON report under the session's `reports/` directory. A report created at 10 minutes contains the first 10 minutes; later reports contain all data from session start through their own generation time.
+
 ## Architecture
 
 ```text
