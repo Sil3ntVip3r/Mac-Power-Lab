@@ -21,6 +21,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var isGeneratingReport = false
     @Published private(set) var reportMessage: String?
     @Published private(set) var latestReportURL: URL?
+    @Published private(set) var runtimeSettings: RuntimeSettings?
+    @Published private(set) var runtimeProfiles: [RuntimeProfileDefinition] = []
+    @Published private(set) var isApplyingSettings = false
+    @Published private(set) var settingsMessage: String?
 
     @Published var benchmarkCatalog: [BenchmarkDefinition] = BenchmarkDefinition.fallbackCatalog
     @Published var selectedBenchmark = "quick"
@@ -68,11 +72,15 @@ final class AppModel: ObservableObject {
                 await api.configure(baseURL: connection.url, token: connection.token)
                 async let statusRequest = api.status()
                 async let catalogRequest = api.benchmarks()
+                async let settingsRequest = api.runtimeSettings()
+                async let profilesRequest = api.runtimeProfiles()
                 status = try await statusRequest
                 let catalog = try await catalogRequest
                 if !catalog.isEmpty {
                     benchmarkCatalog = catalog
                 }
+                runtimeSettings = try await settingsRequest
+                runtimeProfiles = try await profilesRequest
                 applyBenchmarkDefaults(selectedBenchmark)
                 if let artifact = try? await api.latestReport() {
                     latestReportURL = URL(fileURLWithPath: artifact.htmlPath)
@@ -92,6 +100,33 @@ final class AppModel: ObservableObject {
                     status = try await api.stopMonitor()
                 } else {
                     status = try await api.startMonitor()
+                }
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func applyRuntimeSettings(_ settings: RuntimeSettings) {
+        guard !isApplyingSettings else { return }
+        if let validationMessage = settings.validationMessage {
+            errorMessage = validationMessage
+            return
+        }
+        isApplyingSettings = true
+        errorMessage = nil
+        settingsMessage = nil
+        let wasRunning = status?.monitorRunning == true
+        let previousSessionID = status?.session?.id
+        Task {
+            defer { isApplyingSettings = false }
+            do {
+                runtimeSettings = try await api.updateRuntimeSettings(settings)
+                status = try await api.status()
+                if wasRunning, status?.session?.id != previousSessionID {
+                    settingsMessage = "Settings applied. Monitoring restarted in a new session."
+                } else {
+                    settingsMessage = "Settings applied."
                 }
             } catch {
                 errorMessage = error.localizedDescription
@@ -159,6 +194,10 @@ final class AppModel: ObservableObject {
 
     func generateReport() {
         guard !isGeneratingReport else { return }
+        guard runtimeSettings?.loggingEnabled != false else {
+            errorMessage = "Durable logging is off. Enable logging and start a reportable session before generating a historical report."
+            return
+        }
         isGeneratingReport = true
         errorMessage = nil
         reportMessage = nil
@@ -207,17 +246,21 @@ final class AppModel: ObservableObject {
         reportMessage = nil
     }
 
+    func dismissSettingsMessage() {
+        settingsMessage = nil
+    }
+
     private func startPolling() {
         pollingTask?.cancel()
         pollingTask = Task {
             while !Task.isCancelled {
                 do {
                     status = try await api.status()
-                    errorMessage = nil
                 } catch {
                     errorMessage = error.localizedDescription
                 }
-                try? await Task.sleep(for: .seconds(1))
+                let refreshMS = runtimeSettings?.uiRefreshMS ?? 1_000
+                try? await Task.sleep(for: .milliseconds(refreshMS))
             }
         }
     }

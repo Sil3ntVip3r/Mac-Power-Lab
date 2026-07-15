@@ -7,7 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"time"
+
+	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/model"
 )
 
 // Config controls monitor sampling, persistence, attribution, and helpers.
@@ -16,17 +17,16 @@ import (
 // intervals. A full tasks/coalitions plist is much larger than a CPU/GPU/thermal
 // sample and must not be streamed at dashboard refresh frequency.
 type Config struct {
-	DataDir              string
-	SampleInterval       time.Duration
-	PowermetricsInterval time.Duration
-	ProcessInterval      time.Duration
-	TopApps              int
-	AppAttribution       bool
-	SQLite               bool
-	LegacyDir            string
-	NativeDir            string
-	NativeBinDir         string
-	NoColor              bool
+	DataDir        string
+	Runtime        model.RuntimeSettings
+	TopApps        int
+	AppAttribution bool
+	SQLite         bool
+	SafeMode       bool
+	LegacyDir      string
+	NativeDir      string
+	NativeBinDir   string
+	NoColor        bool
 }
 
 // Default returns safe production defaults for a local interactive run.
@@ -37,16 +37,14 @@ func Default() Config {
 		data = filepath.Join(os.TempDir(), "MacPowerLab")
 	}
 	return Config{
-		DataDir:              data,
-		SampleInterval:       time.Second,
-		PowermetricsInterval: 2 * time.Second,
-		ProcessInterval:      10 * time.Second,
-		TopApps:              12,
-		AppAttribution:       true,
-		SQLite:               true,
-		LegacyDir:            "legacy",
-		NativeDir:            "native",
-		NativeBinDir:         "bin/native",
+		DataDir:        data,
+		Runtime:        DefaultRuntimeSettings(),
+		TopApps:        12,
+		AppAttribution: true,
+		SQLite:         true,
+		LegacyDir:      "legacy",
+		NativeDir:      "native",
+		NativeBinDir:   "bin/native",
 	}
 }
 
@@ -55,14 +53,8 @@ func (c Config) Validate() error {
 	if c.DataDir == "" {
 		return errors.New("data directory must not be empty")
 	}
-	if c.SampleInterval < 250*time.Millisecond || c.SampleInterval > time.Minute {
-		return fmt.Errorf("sample interval must be between 250ms and 1m: %s", c.SampleInterval)
-	}
-	if c.PowermetricsInterval < time.Second || c.PowermetricsInterval > time.Minute {
-		return fmt.Errorf("powermetrics interval must be between 1s and 1m: %s", c.PowermetricsInterval)
-	}
-	if c.ProcessInterval < 2*time.Second || c.ProcessInterval > 5*time.Minute {
-		return fmt.Errorf("process interval must be between 2s and 5m: %s", c.ProcessInterval)
+	if err := ValidateRuntimeSettings(c.Runtime); err != nil {
+		return fmt.Errorf("runtime settings: %w", err)
 	}
 	if c.TopApps < 1 || c.TopApps > 100 {
 		return fmt.Errorf("top apps must be between 1 and 100: %d", c.TopApps)

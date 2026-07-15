@@ -18,12 +18,12 @@ MACOS="$CONTENTS/MacOS"
 RES="$CONTENTS/Resources"
 
 cleanup_failed_app() {
-  local status=$?
+  local exit_status=$?
   local command=${ZSH_DEBUG_CMD:-unknown-command}
   echo "build_swiftui_app.sh failed at line ${LINENO}: ${command}" >&2
   echo "Removing incomplete app bundle: $APP" >&2
   rm -rf "$APP"
-  exit "$status"
+  exit "$exit_status"
 }
 trap cleanup_failed_app ZERR
 

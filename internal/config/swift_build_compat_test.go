@@ -41,5 +41,8 @@ func TestZshErrorTrapsAreSafeWithNoUnset(t *testing.T) {
 			!strings.Contains(text, "${ZSH_DEBUG_CMD:-") {
 			t.Fatalf("%s references ZSH_DEBUG_CMD unsafely", relative)
 		}
+		if strings.Contains(text, "trap 'status=") || strings.Contains(text, "local status=") {
+			t.Fatalf("%s assigns zsh's read-only status variable", relative)
+		}
 	}
 }

@@ -13,6 +13,24 @@
   "properties": {
     "schema": {
       "const": "macpowerlab.session.v1"
+    },
+    "runtime_settings": {
+      "$ref": "runtime_settings.schema.json"
+    },
+    "effective_options": {
+      "type": "object",
+      "required": [
+        "app_attribution",
+        "top_apps",
+        "sqlite_mirror"
+      ],
+      "properties": {
+        "app_attribution": { "type": "boolean" },
+        "top_apps": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "sqlite_mirror": { "type": "boolean" },
+        "safe_mode": { "type": "boolean" }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": true

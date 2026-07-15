@@ -154,3 +154,194 @@ func TestSessionSnapshotPinsJSONLByteBoundary(t *testing.T) {
 		t.Fatalf("second snapshot records=%d want=2", got)
 	}
 }
+
+func TestLiveSampleGateRetainsOnlyLatestPendingSample(t *testing.T) {
+	st, err := NewSessionWithOptions(
+		t.TempDir(),
+		model.Session{ID: "cadence", StartedAt: time.Now()},
+		SessionOptions{SampleLogging: true, LogInterval: 5 * time.Second},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	base := time.Unix(1_700_000_000, 0)
+	offer := func(sequence uint64, offset time.Duration) model.PowerSample {
+		t.Helper()
+		sample := model.PowerSample{
+			SessionID: "cadence",
+			Sequence:  sequence,
+			Timestamp: base.Add(offset),
+			Warnings:  []string{"original"},
+		}
+		if err := st.OfferSample(sample); err != nil {
+			t.Fatal(err)
+		}
+		return sample
+	}
+	offer(1, 0)
+	offer(2, time.Second)
+	third := offer(3, 2*time.Second)
+	third.Warnings[0] = "mutated-after-offer"
+
+	// Buffer durability is independent from pending-sample publication.
+	if err := st.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if got := countSamples(t, st.Dir); got != 1 {
+		t.Fatalf("samples after periodic flush=%d want=1", got)
+	}
+	if st.pendingSample == nil || st.pendingSample.Sequence != 3 || st.pendingSample.Warnings[0] != "original" {
+		t.Fatalf("pending sample=%+v", st.pendingSample)
+	}
+
+	// The next due live frame is written, and the superseded pending frame is
+	// intentionally discarded rather than replayed.
+	offer(4, 5*time.Second)
+	if err := st.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if got := countSamples(t, st.Dir); got != 2 {
+		t.Fatalf("samples at cadence boundary=%d want=2", got)
+	}
+	if st.pendingSample != nil {
+		t.Fatalf("pending sample was not cleared: %+v", st.pendingSample)
+	}
+}
+
+func TestSnapshotAndCloseFlushLatestPendingSample(t *testing.T) {
+	st, err := NewSessionWithOptions(
+		t.TempDir(),
+		model.Session{ID: "boundaries", StartedAt: time.Now()},
+		SessionOptions{SampleLogging: true, LogInterval: time.Minute},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Unix(1_700_000_000, 0)
+	for sequence := uint64(1); sequence <= 3; sequence++ {
+		if err := st.OfferSample(model.PowerSample{
+			SessionID: "boundaries",
+			Sequence:  sequence,
+			Timestamp: base.Add(time.Duration(sequence) * time.Second),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.Snapshot(); err != nil {
+		t.Fatal(err)
+	}
+	if got := countSamples(t, st.Dir); got != 2 {
+		t.Fatalf("snapshot samples=%d want first+latest=2", got)
+	}
+	if err := st.OfferSample(model.PowerSample{
+		SessionID: "boundaries",
+		Sequence:  4,
+		Timestamp: base.Add(4 * time.Second),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := countSamples(t, st.Dir); got != 3 {
+		t.Fatalf("close samples=%d want=3", got)
+	}
+}
+
+func TestLiveOnlyDropsDurableSamples(t *testing.T) {
+	st, err := NewSessionWithOptions(
+		t.TempDir(),
+		model.Session{ID: "live-only", StartedAt: time.Now()},
+		SessionOptions{SampleLogging: false},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.OfferSample(model.PowerSample{
+		SessionID: "live-only",
+		Sequence:  1,
+		Timestamp: time.Now(),
+		Attribution: model.AttributionResult{
+			Apps: []model.AppPower{{Name: "App", Key: "app"}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Snapshot(); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := countSamples(t, st.Dir); got != 0 {
+		t.Fatalf("live-only samples=%d want=0", got)
+	}
+	apps, err := os.ReadFile(filepath.Join(st.Dir, "apps.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(apps) != 0 {
+		t.Fatalf("live-only apps log is not empty: %q", apps)
+	}
+}
+
+func TestAppLogFailureDoesNotDuplicateCanonicalSample(t *testing.T) {
+	st, err := NewSessionWithOptions(
+		t.TempDir(),
+		model.Session{ID: "partial-write", StartedAt: time.Now()},
+		SessionOptions{SampleLogging: true, LogInterval: time.Minute},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	base := time.Unix(1_700_000_000, 0)
+	appWriter := st.apps
+	st.apps = nil
+	err = st.OfferSample(model.PowerSample{
+		SessionID: "partial-write",
+		Sequence:  1,
+		Timestamp: base,
+		Attribution: model.AttributionResult{
+			Apps: []model.AppPower{{Key: "app", Name: "App"}},
+		},
+	})
+	st.apps = appWriter
+	if err == nil {
+		t.Fatal("expected injected app writer failure")
+	}
+	if st.pendingSample != nil {
+		t.Fatalf("canonical sample was incorrectly retained for retry: %+v", st.pendingSample)
+	}
+	if err := st.OfferSample(model.PowerSample{
+		SessionID: "partial-write",
+		Sequence:  2,
+		Timestamp: base.Add(time.Second),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Snapshot(); err != nil {
+		t.Fatal(err)
+	}
+	if got := countSamples(t, st.Dir); got != 2 {
+		t.Fatalf("canonical samples=%d want exactly first+latest", got)
+	}
+}
+
+func countSamples(t *testing.T, dir string) int {
+	t.Helper()
+	count := 0
+	if err := ReadJSONL[model.PowerSample](
+		filepath.Join(dir, "samples.jsonl"),
+		func(model.PowerSample) error {
+			count++
+			return nil
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}

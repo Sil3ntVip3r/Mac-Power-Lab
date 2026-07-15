@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/config"
+	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/model"
 )
 
 func TestLoopbackTokenAPI(t *testing.T) {
@@ -73,6 +74,73 @@ func TestLoopbackTokenAPI(t *testing.T) {
 	}
 
 	authHeader := "Bearer " + strings.TrimSpace(string(tokenBytes))
+
+	req, _ = http.NewRequest(http.MethodGet, base+"/settings", nil)
+	req.Header.Set("Authorization", authHeader)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runtimeSettings model.RuntimeSettings
+	if err := json.NewDecoder(resp.Body).Decode(&runtimeSettings); err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || runtimeSettings.Profile != config.ProfileDefault {
+		t.Fatalf("settings status=%d value=%+v", resp.StatusCode, runtimeSettings)
+	}
+
+	req, _ = http.NewRequest(http.MethodGet, base+"/settings/profiles", nil)
+	req.Header.Set("Authorization", authHeader)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var profiles []config.ProfileDefinition
+	if err := json.NewDecoder(resp.Body).Decode(&profiles); err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || len(profiles) != 6 {
+		t.Fatalf("profiles status=%d entries=%d", resp.StatusCode, len(profiles))
+	}
+
+	invalidSettings := bytes.NewBufferString(`{"schema":"macpowerlab.runtime_settings.v1","unexpected":true}`)
+	req, _ = http.NewRequest(http.MethodPut, base+"/settings", invalidSettings)
+	req.Header.Set("Authorization", authHeader)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid settings status=%d", resp.StatusCode)
+	}
+
+	balanced, err := config.SettingsForProfile(config.ProfileBalanced)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settingsPayload, err := json.Marshal(balanced)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, _ = http.NewRequest(http.MethodPut, base+"/settings", bytes.NewReader(settingsPayload))
+	req.Header.Set("Authorization", authHeader)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("valid settings status=%d", resp.StatusCode)
+	}
+	loaded, found, err := config.LoadRuntimeSettings(cfg.DataDir)
+	if err != nil || !found || loaded.Profile != config.ProfileBalanced {
+		t.Fatalf("persisted settings=%+v found=%t err=%v", loaded, found, err)
+	}
 
 	req, _ = http.NewRequest(http.MethodGet, base+"/benchmarks", nil)
 	req.Header.Set("Authorization", authHeader)

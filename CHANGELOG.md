@@ -4,6 +4,20 @@ All notable changes to Mac Power Lab are documented here. Detailed historical no
 
 ## [Unreleased]
 
+### Added
++- Added versioned runtime profiles with independent live, collector, application-attribution, and durable-log cadences.
++- Added local-only Live-only mode, strict private settings persistence, settings API/CLI/SwiftUI controls, and conservative ordinary process priority.
++- Added complete effective collection options to new session metadata and durable product, UX, privacy, and roadmap documentation.
+
+### Fixed
++- Made settings restarts transactional so persistence or shutdown failure cannot launch overlapping collectors.
++- Disabled misleading historical report generation while durable logging is off and extended the settings-update client timeout.
+
+### Added
+- Added the versioned `macpowerlab.runtime_settings.v1` contract, six runtime profiles, strict private atomic persistence, authenticated settings API, CLI overrides, and complete SwiftUI settings controls.
+- Separated dashboard refresh, battery collection, system `powermetrics`, app attribution, and durable logging cadences, including live-only monitoring and a latest-pending-sample persistence gate.
+- Added safe fresh-session monitor restarts, boundary flushes, ordinary process nice control, and benchmark-child priority normalization.
+
 ### Fixed
 - Corrected Apple Silicon `powermetrics` CPU, GPU, package, ANE, DRAM, and cluster power fields from milliwatts to watts using explicit source units.
 - Treated an empty optional `AppleSmartBatteryBank` result as not present instead of producing a repeated parse warning.

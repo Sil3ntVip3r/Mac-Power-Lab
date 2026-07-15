@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://macpowerlab.local/contracts/v1/runtime_settings.schema.json",
+  "title": "macpowerlab.runtime_settings.v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "profile",
+    "ui_refresh_ms",
+    "battery_collection_ms",
+    "powermetrics_ms",
+    "app_attribution_ms",
+    "logging_enabled",
+    "log_interval_ms",
+    "process_nice"
+  ],
+  "properties": {
+    "schema": {
+      "const": "macpowerlab.runtime_settings.v1"
+    },
+    "profile": {
+      "enum": [
+        "default",
+        "high_responsiveness",
+        "balanced",
+        "low_overhead",
+        "live_only",
+        "custom"
+      ]
+    },
+    "ui_refresh_ms": {
+      "type": "integer",
+      "minimum": 500,
+      "maximum": 60000
+    },
+    "battery_collection_ms": {
+      "type": "integer",
+      "minimum": 500,
+      "maximum": 60000
+    },
+    "powermetrics_ms": {
+      "type": "integer",
+      "minimum": 1000,
+      "maximum": 60000
+    },
+    "app_attribution_ms": {
+      "type": "integer",
+      "minimum": 2000,
+      "maximum": 60000
+    },
+    "logging_enabled": {
+      "type": "boolean"
+    },
+    "log_interval_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 60000
+    },
+    "process_nice": {
+      "type": "integer",
+      "minimum": -5,
+      "maximum": 10
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "logging_enabled": {
+            "const": false
+          }
+        },
+        "required": [
+          "logging_enabled"
+        ]
+      },
+      "then": {
+        "properties": {
+          "log_interval_ms": {
+            "const": 0
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "log_interval_ms": {
+            "minimum": 500
+          }
+        }
+      }
+    }
+  ],
+  "additionalProperties": false
+}

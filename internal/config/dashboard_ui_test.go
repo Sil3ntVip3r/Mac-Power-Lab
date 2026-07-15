@@ -109,10 +109,35 @@ func TestReportGenerationUXIsVisibleAndActionable(t *testing.T) {
 		}
 	}
 
-	for _, required := range []string{"timeout: 120", "/report/latest", "ReportArtifact"} {
+	for _, required := range []string{"timeout: 120", "timeout: 90", "/report/latest", "ReportArtifact"} {
 		if !strings.Contains(client, required) {
 			t.Fatalf("APIClient missing timestamped report behavior %q", required)
 		}
+	}
+}
+
+func TestLiveOnlyModeDisablesHistoricalReports(t *testing.T) {
+	model := readSwiftUIFile(t, "AppModel.swift")
+	content := readSwiftUIFile(t, "ContentView.swift")
+	settings := readSwiftUIFile(t, "SettingsView.swift")
+	for _, required := range []string{
+		"runtimeSettings?.loggingEnabled != false",
+		"Durable logging is off",
+	} {
+		if !strings.Contains(model, required) {
+			t.Fatalf("AppModel missing Live-only report guard %q", required)
+		}
+	}
+	for _, required := range []string{
+		"model.runtimeSettings?.loggingEnabled == false",
+		"Enable durable logging to generate historical reports",
+	} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("ContentView missing Live-only report behavior %q", required)
+		}
+	}
+	if !strings.Contains(settings, "Historical reports are unavailable") {
+		t.Fatal("SettingsView must explain Live-only report behavior")
 	}
 }
 
@@ -126,6 +151,66 @@ func TestApplicationPowerDistinguishesZeroFromUnavailable(t *testing.T) {
 	} {
 		if !strings.Contains(apps, required) {
 			t.Fatalf("ApplicationsView missing zero-attribution behavior %q", required)
+		}
+	}
+}
+
+func TestRuntimeSettingsControlsCoverAPIAndSafetySemantics(t *testing.T) {
+	models := readSwiftUIFile(t, "Models.swift")
+	client := readSwiftUIFile(t, "APIClient.swift")
+	appModel := readSwiftUIFile(t, "AppModel.swift")
+	settings := readSwiftUIFile(t, "SettingsView.swift")
+
+	for _, required := range []string{
+		"macpowerlab.runtime_settings.v1",
+		"ui_refresh_ms",
+		"battery_collection_ms",
+		"powermetrics_ms",
+		"app_attribution_ms",
+		"logging_enabled",
+		"log_interval_ms",
+		"process_nice",
+	} {
+		if !strings.Contains(models, required) {
+			t.Fatalf("Models.swift missing runtime settings field %q", required)
+		}
+	}
+
+	for _, required := range []string{
+		"/settings",
+		"/settings/profiles",
+		"method: \"PUT\"",
+		"updateRuntimeSettings",
+	} {
+		if !strings.Contains(client, required) {
+			t.Fatalf("APIClient missing runtime settings behavior %q", required)
+		}
+	}
+
+	for _, required := range []string{
+		"api.runtimeSettings()",
+		"api.runtimeProfiles()",
+		"api.updateRuntimeSettings(settings)",
+		"Task.sleep(for: .milliseconds(refreshMS))",
+	} {
+		if !strings.Contains(appModel, required) {
+			t.Fatalf("AppModel missing runtime settings behavior %q", required)
+		}
+	}
+
+	for _, required := range []string{
+		"Runtime profile",
+		"UI refresh",
+		"Battery collection",
+		"powermetrics",
+		"App attribution",
+		"Log power and app samples",
+		"Ordinary nice value",
+		"never kernel real-time scheduling",
+		"starts a fresh session",
+	} {
+		if !strings.Contains(settings, required) {
+			t.Fatalf("SettingsView missing runtime control or safety copy %q", required)
 		}
 	}
 }

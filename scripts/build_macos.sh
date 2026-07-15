@@ -10,7 +10,7 @@ source "${0:A:h}/lib.sh"
 require go
 require xattr
 require codesign
-trap 'status=$?; command=${ZSH_DEBUG_CMD:-unknown-command}; echo "${0:t} failed at line ${LINENO}: ${command}" >&2; exit $status' ZERR
+trap 'exit_status=$?; command=${ZSH_DEBUG_CMD:-unknown-command}; echo "${0:t} failed at line ${LINENO}: ${command}" >&2; exit $exit_status' ZERR
 
 echo "[1/5] Clearing quarantine from this project..."
 xattr -dr com.apple.quarantine "$ROOT" 2>/dev/null || true

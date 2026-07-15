@@ -23,8 +23,10 @@ import (
 	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/config"
 	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/execx"
 	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/legacy"
+	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/model"
 	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/parity"
 	plistx "github.com/Sil3ntVip3r/Mac-Power-Lab/internal/plist"
+	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/priority"
 	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/report"
 	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/server"
 	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/store"
@@ -80,36 +82,205 @@ func run(args []string) error {
 	}
 }
 
-func commonFlags(fs *flag.FlagSet, cfg *config.Config) {
+type commonFlagBindings struct {
+	cfg                  *config.Config
+	profile              string
+	legacyInterval       time.Duration
+	uiRefresh            time.Duration
+	batteryInterval      time.Duration
+	powermetricsInterval time.Duration
+	processInterval      time.Duration
+	logging              bool
+	logInterval          time.Duration
+	processNice          int
+}
+
+func commonFlags(fs *flag.FlagSet, cfg *config.Config) *commonFlagBindings {
+	runtimeSettings := cfg.Runtime
+	bindings := &commonFlagBindings{
+		cfg:                  cfg,
+		profile:              runtimeSettings.Profile,
+		legacyInterval:       time.Duration(runtimeSettings.BatteryCollectionMS) * time.Millisecond,
+		uiRefresh:            time.Duration(runtimeSettings.UIRefreshMS) * time.Millisecond,
+		batteryInterval:      time.Duration(runtimeSettings.BatteryCollectionMS) * time.Millisecond,
+		powermetricsInterval: time.Duration(runtimeSettings.PowermetricsMS) * time.Millisecond,
+		processInterval:      time.Duration(runtimeSettings.AppAttributionMS) * time.Millisecond,
+		logging:              runtimeSettings.LoggingEnabled,
+		logInterval:          time.Duration(runtimeSettings.LogIntervalMS) * time.Millisecond,
+		processNice:          runtimeSettings.ProcessNice,
+	}
 	fs.StringVar(&cfg.DataDir, "data-dir", cfg.DataDir, "private data directory")
-	fs.DurationVar(&cfg.SampleInterval, "interval", cfg.SampleInterval, "battery/UI sample interval")
-	fs.DurationVar(&cfg.PowermetricsInterval, "powermetrics-interval", cfg.PowermetricsInterval, "system powermetrics sample interval")
-	fs.DurationVar(&cfg.ProcessInterval, "process-interval", cfg.ProcessInterval, "process/app attribution sample interval")
+	fs.StringVar(&bindings.profile, "profile", bindings.profile, "runtime profile: default, high-responsiveness, balanced, low-overhead, live-only, custom")
+	fs.DurationVar(&bindings.legacyInterval, "interval", bindings.legacyInterval, "legacy battery/UI interval override")
+	fs.DurationVar(&bindings.uiRefresh, "ui-refresh", bindings.uiRefresh, "live UI refresh interval")
+	fs.DurationVar(&bindings.batteryInterval, "battery-interval", bindings.batteryInterval, "battery collection interval")
+	fs.DurationVar(&bindings.powermetricsInterval, "powermetrics-interval", bindings.powermetricsInterval, "system powermetrics sample interval")
+	fs.DurationVar(&bindings.processInterval, "process-interval", bindings.processInterval, "process/app attribution sample interval")
+	fs.BoolVar(&bindings.logging, "logging", bindings.logging, "enable durable power/app sample logging")
+	fs.DurationVar(&bindings.logInterval, "log-interval", bindings.logInterval, "durable sample log interval")
+	fs.IntVar(&bindings.processNice, "process-nice", bindings.processNice, "ordinary process nice value (-5 through 10)")
 	fs.IntVar(&cfg.TopApps, "top-apps", cfg.TopApps, "number of attributed apps retained")
 	fs.BoolVar(&cfg.AppAttribution, "apps", cfg.AppAttribution, "enable app power attribution")
 	fs.BoolVar(&cfg.SQLite, "sqlite", cfg.SQLite, "write optional SQLite mirror when sqlite3 is available")
 	fs.StringVar(&cfg.NativeDir, "native-dir", cfg.NativeDir, "native workload source directory")
 	fs.StringVar(&cfg.NativeBinDir, "native-bin-dir", cfg.NativeBinDir, "native workload binary directory")
 	fs.BoolVar(&cfg.NoColor, "no-color", cfg.NoColor, "disable ANSI colors")
+	return bindings
+}
+
+func (bindings *commonFlagBindings) apply(fs *flag.FlagSet) error {
+	if bindings == nil || bindings.cfg == nil {
+		return errors.New("runtime flag bindings are not initialized")
+	}
+	visited := make(map[string]bool)
+	fs.Visit(func(value *flag.Flag) { visited[value.Name] = true })
+	settings := bindings.cfg.Runtime
+	if visited["profile"] {
+		profile := strings.ToLower(strings.TrimSpace(bindings.profile))
+		profile = strings.NewReplacer("-", "_", " ", "_").Replace(profile)
+		if profile == config.ProfileCustom {
+			settings.Profile = config.ProfileCustom
+		} else {
+			var err error
+			settings, err = config.SettingsForProfile(profile)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	individualOverride := false
+	applyDuration := func(name string, value time.Duration, destination *int64) error {
+		if !visited[name] {
+			return nil
+		}
+		if value%time.Millisecond != 0 {
+			return fmt.Errorf("--%s must use whole milliseconds: %s", name, value)
+		}
+		*destination = value.Milliseconds()
+		individualOverride = true
+		return nil
+	}
+	if visited["interval"] {
+		if bindings.legacyInterval%time.Millisecond != 0 {
+			return fmt.Errorf("--interval must use whole milliseconds: %s", bindings.legacyInterval)
+		}
+		settings.UIRefreshMS = bindings.legacyInterval.Milliseconds()
+		settings.BatteryCollectionMS = bindings.legacyInterval.Milliseconds()
+		individualOverride = true
+	}
+	if err := applyDuration("ui-refresh", bindings.uiRefresh, &settings.UIRefreshMS); err != nil {
+		return err
+	}
+	if err := applyDuration("battery-interval", bindings.batteryInterval, &settings.BatteryCollectionMS); err != nil {
+		return err
+	}
+	if err := applyDuration("powermetrics-interval", bindings.powermetricsInterval, &settings.PowermetricsMS); err != nil {
+		return err
+	}
+	if err := applyDuration("process-interval", bindings.processInterval, &settings.AppAttributionMS); err != nil {
+		return err
+	}
+	if visited["logging"] {
+		settings.LoggingEnabled = bindings.logging
+		if !bindings.logging && !visited["log-interval"] {
+			settings.LogIntervalMS = 0
+		}
+		if bindings.logging && settings.LogIntervalMS == 0 && !visited["log-interval"] {
+			settings.LogIntervalMS = 1000
+		}
+		individualOverride = true
+	}
+	if err := applyDuration("log-interval", bindings.logInterval, &settings.LogIntervalMS); err != nil {
+		return err
+	}
+	if visited["process-nice"] {
+		settings.ProcessNice = bindings.processNice
+		individualOverride = true
+	}
+	if individualOverride {
+		config.ReconcileProfile(&settings)
+	}
+	bindings.cfg.Runtime = settings
+	return bindings.cfg.Validate()
+}
+
+func loadRuntimeConfig(args []string) (config.Config, error) {
+	cfg := config.Default()
+	dataDir, err := dataDirOverride(args, cfg.DataDir)
+	if err != nil {
+		return config.Config{}, err
+	}
+	cfg.DataDir = dataDir
+	settings, _, err := config.LoadRuntimeSettings(dataDir)
+	if err != nil {
+		return config.Config{}, err
+	}
+	cfg.Runtime = settings
+	return cfg, nil
+}
+
+func dataDirOverride(args []string, fallback string) (string, error) {
+	value := fallback
+	for index := 0; index < len(args); index++ {
+		argument := args[index]
+		if argument == "--" {
+			break
+		}
+		if argument == "--data-dir" || argument == "-data-dir" {
+			if index+1 >= len(args) {
+				return "", errors.New("data-dir flag requires a value")
+			}
+			index++
+			value = args[index]
+			continue
+		}
+		for _, prefix := range []string{"--data-dir=", "-data-dir="} {
+			if strings.HasPrefix(argument, prefix) {
+				value = strings.TrimPrefix(argument, prefix)
+			}
+		}
+	}
+	return value, nil
+}
+
+func applyConfiguredPriority(settings model.RuntimeSettings) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return priority.Set(ctx, settings.ProcessNice)
 }
 
 func runMonitor(args []string) error {
-	cfg := config.Default()
+	cfg, err := loadRuntimeConfig(args)
+	if err != nil {
+		return err
+	}
 	fs := flag.NewFlagSet("monitor", flag.ContinueOnError)
-	commonFlags(fs, &cfg)
+	bindings := commonFlags(fs, &cfg)
 	duration := fs.Duration("duration", 0, "optional monitor duration; zero runs until Ctrl+C")
 	safeMode := fs.Bool("safe", false, "disable app attribution and SQLite for minimum-overhead diagnostics")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if err := bindings.apply(fs); err != nil {
+		return err
+	}
 	if *safeMode {
 		cfg.AppAttribution = false
 		cfg.SQLite = false
-		if cfg.PowermetricsInterval < 3*time.Second {
-			cfg.PowermetricsInterval = 3 * time.Second
+		cfg.SafeMode = true
+		if cfg.Runtime.PowermetricsMS < 3000 {
+			cfg.Runtime.PowermetricsMS = 3000
+			config.ReconcileProfile(&cfg.Runtime)
+		}
+		if err := cfg.Validate(); err != nil {
+			return err
 		}
 	}
 	if err := ensureSudo(true); err != nil {
+		return err
+	}
+	if err := applyConfiguredPriority(cfg.Runtime); err != nil {
 		return err
 	}
 	ctx, cancel := signalContext()
@@ -144,18 +315,27 @@ func runMonitor(args []string) error {
 }
 
 func runApps(args []string) error {
-	cfg := config.Default()
+	cfg, err := loadRuntimeConfig(args)
+	if err != nil {
+		return err
+	}
 	fs := flag.NewFlagSet("apps", flag.ContinueOnError)
-	commonFlags(fs, &cfg)
+	bindings := commonFlags(fs, &cfg)
 	duration := fs.Duration("duration", 8*time.Second, "sampling duration")
 	jsonOutput := fs.Bool("json", false, "print JSON")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := bindings.apply(fs); err != nil {
 		return err
 	}
 	if *duration < 2*time.Second || *duration > 10*time.Minute {
 		return errors.New("duration must be between 2s and 10m")
 	}
 	if err := ensureSudo(true); err != nil {
+		return err
+	}
+	if err := applyConfiguredPriority(cfg.Runtime); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), *duration)
@@ -207,9 +387,12 @@ func runBenchmark(args []string) error {
 		return nil
 	}
 
-	cfg := config.Default()
+	cfg, err := loadRuntimeConfig(args[1:])
+	if err != nil {
+		return err
+	}
 	fs := flag.NewFlagSet("benchmark "+kind, flag.ContinueOnError)
-	commonFlags(fs, &cfg)
+	bindings := commonFlags(fs, &cfg)
 	duration := fs.Duration("duration", 0, "preset duration override or custom workload duration")
 	memoryMB := fs.Int("memory-mb", 0, "memory stress allocation in MB; zero uses native default")
 	profile := fs.String("gpu-profile", "high", "GPU profile: normal, high, extreme")
@@ -224,6 +407,9 @@ func runBenchmark(args []string) error {
 	customName := fs.String("name", "Custom workload", "custom mode display name")
 
 	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if err := bindings.apply(fs); err != nil {
 		return err
 	}
 	if *duration < 0 || *duration > 24*time.Hour {
@@ -242,10 +428,7 @@ func runBenchmark(args []string) error {
 		return errors.New("cooldown must be between 0 and 1h")
 	}
 
-	var (
-		plan benchmark.Plan
-		err  error
-	)
+	var plan benchmark.Plan
 	if kind == "custom" {
 		workloadDuration := *duration
 		if workloadDuration == 0 {
@@ -273,6 +456,9 @@ func runBenchmark(args []string) error {
 	if err := ensureSudo(true); err != nil {
 		return err
 	}
+	if err := applyConfiguredPriority(cfg.Runtime); err != nil {
+		return err
+	}
 	ctx, cancel := signalContext()
 	defer cancel()
 	m, err := collector.NewManager(cfg)
@@ -285,10 +471,11 @@ func runBenchmark(args []string) error {
 	controller := benchmark.New(m)
 	root := projectRoot()
 	options := benchmark.Options{
-		NativeDir:  filepath.Join(root, "native"),
-		BinDir:     filepath.Join(root, "bin", "native"),
-		MemoryMB:   *memoryMB,
-		GPUProfile: *profile,
+		NativeDir:   filepath.Join(root, "native"),
+		BinDir:      filepath.Join(root, "bin", "native"),
+		MemoryMB:    *memoryMB,
+		GPUProfile:  *profile,
+		ProcessNice: cfg.Runtime.ProcessNice,
 	}
 
 	tuiDone := make(chan error, 1)
@@ -347,8 +534,11 @@ func runBuildNative(args []string) error {
 func runReport(args []string) error {
 	cfg := config.Default()
 	fs := flag.NewFlagSet("report", flag.ContinueOnError)
-	commonFlags(fs, &cfg)
+	bindings := commonFlags(fs, &cfg)
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := bindings.apply(fs); err != nil {
 		return err
 	}
 	dir := ""
@@ -380,8 +570,11 @@ func runReport(args []string) error {
 func runCompare(args []string) error {
 	cfg := config.Default()
 	fs := flag.NewFlagSet("compare", flag.ContinueOnError)
-	commonFlags(fs, &cfg)
+	bindings := commonFlags(fs, &cfg)
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := bindings.apply(fs); err != nil {
 		return err
 	}
 	out, err := report.CompareLatest(cfg.DataDir)
@@ -414,9 +607,12 @@ func runLogs(args []string) error {
 	}
 	cfg := config.Default()
 	fs := flag.NewFlagSet("logs pack", flag.ContinueOnError)
-	commonFlags(fs, &cfg)
+	bindings := commonFlags(fs, &cfg)
 	output := fs.String("output", "", "archive output path")
 	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if err := bindings.apply(fs); err != nil {
 		return err
 	}
 	dir := ""
@@ -442,11 +638,14 @@ func runLogs(args []string) error {
 func runParity(args []string) error {
 	cfg := config.Default()
 	fs := flag.NewFlagSet("parity", flag.ContinueOnError)
-	commonFlags(fs, &cfg)
+	bindings := commonFlags(fs, &cfg)
 	iterations := fs.Int("iterations", 3, "number of live comparisons")
 	output := fs.String("output", filepath.Join(cfg.DataDir, "parity_report.json"), "report path")
 	legacyDir := fs.String("legacy-dir", filepath.Join(projectRoot(), "legacy"), "legacy implementation directory")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := bindings.apply(fs); err != nil {
 		return err
 	}
 	if *iterations < 1 || *iterations > 100 {
@@ -512,13 +711,19 @@ func runParse(args []string) error {
 }
 
 func runServe(args []string) error {
-	cfg := config.Default()
+	cfg, err := loadRuntimeConfig(args)
+	if err != nil {
+		return err
+	}
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	commonFlags(fs, &cfg)
+	bindings := commonFlags(fs, &cfg)
 	addr := fs.String("addr", "127.0.0.1:0", "loopback listen address")
 	tokenFile := fs.String("token-file", "", "private API token file")
 	autoMonitor := fs.Bool("auto-monitor", false, "start monitoring when server starts")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := bindings.apply(fs); err != nil {
 		return err
 	}
 	if err := cfg.Prepare(); err != nil {

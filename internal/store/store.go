@@ -31,15 +31,28 @@ const (
 // source; SQLite is an optional mirror and its errors are surfaced rather than
 // silently discarded.
 type SessionStore struct {
-	mu      sync.Mutex
-	Dir     string
-	Session model.Session
-	samples *jsonlWriter
-	apps    *jsonlWriter
-	events  *jsonlWriter
-	tests   *jsonlWriter
-	sqlite  sqliteMirror
-	closed  bool
+	mu               sync.Mutex
+	Dir              string
+	Session          model.Session
+	samples          *jsonlWriter
+	apps             *jsonlWriter
+	events           *jsonlWriter
+	tests            *jsonlWriter
+	sqlite           sqliteMirror
+	sampleLogging    bool
+	logInterval      time.Duration
+	pendingSample    *model.PowerSample
+	lastSampleLogged time.Time
+	closed           bool
+}
+
+// SessionOptions configures optional mirrors and the durable live-sample gate.
+// A zero LogInterval with SampleLogging enabled preserves the direct-write
+// behavior used by compatibility callers and tests.
+type SessionOptions struct {
+	SQLite        bool
+	SampleLogging bool
+	LogInterval   time.Duration
 }
 
 // SessionSnapshot is an immutable byte-range view of one session at a precise
@@ -124,11 +137,31 @@ func (w *jsonlWriter) close() error {
 // Existing session IDs are rejected so two sessions can never append into the
 // same JSONL files.
 func NewSession(base string, session model.Session, withSQLite bool) (_ *SessionStore, retErr error) {
+	return NewSessionWithOptions(base, session, SessionOptions{
+		SQLite:        withSQLite,
+		SampleLogging: true,
+	})
+}
+
+// NewSessionWithOptions creates a session with explicit durable-sample
+// behavior. Live-only sessions still retain private session/event/test files,
+// but their sample and app JSONL files remain empty.
+func NewSessionWithOptions(
+	base string,
+	session model.Session,
+	options SessionOptions,
+) (_ *SessionStore, retErr error) {
 	if strings.TrimSpace(base) == "" {
 		return nil, errors.New("session base directory is required")
 	}
 	if strings.TrimSpace(session.ID) == "" {
 		return nil, errors.New("session ID is required")
+	}
+	if options.LogInterval < 0 {
+		return nil, errors.New("sample log interval must not be negative")
+	}
+	if !options.SampleLogging && options.LogInterval != 0 {
+		return nil, errors.New("sample log interval must be zero when sample logging is disabled")
 	}
 
 	sessionsDir := filepath.Join(base, "sessions")
@@ -147,7 +180,12 @@ func NewSession(base string, session model.Session, withSQLite bool) (_ *Session
 	}()
 
 	session.DataDirectory = dir
-	s := &SessionStore{Dir: dir, Session: session}
+	s := &SessionStore{
+		Dir:           dir,
+		Session:       session,
+		sampleLogging: options.SampleLogging,
+		logInterval:   options.LogInterval,
+	}
 	cleanupWriters := func() {
 		_ = errors.Join(
 			s.samples.close(),
@@ -178,7 +216,7 @@ func NewSession(base string, session model.Session, withSQLite bool) (_ *Session
 		return nil, fmt.Errorf("create test-runs log: %w", err)
 	}
 
-	if withSQLite {
+	if options.SQLite {
 		s.sqlite, err = newSQLite(filepath.Join(dir, "session.sqlite3"))
 		if err != nil {
 			var missing *exec.Error
@@ -204,9 +242,59 @@ func (s *SessionStore) WriteSample(v model.PowerSample) error {
 	if s.closed {
 		return errors.New("store closed")
 	}
+	err := s.writeSampleLocked(v)
+	if s.lastSampleLogged.Equal(v.Timestamp) {
+		s.pendingSample = nil
+	}
+	return err
+}
+
+// OfferSample accepts every live sample while durably writing only at the
+// configured cadence. Between writes it retains exactly one deep-copied latest
+// sample, replacing any older pending value.
+func (s *SessionStore) OfferSample(v model.PowerSample) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return errors.New("store closed")
+	}
+	if !s.sampleLogging {
+		return nil
+	}
+	if !s.lastSampleLogged.IsZero() && !v.Timestamp.After(s.lastSampleLogged) {
+		return fmt.Errorf(
+			"live sample timestamp must advance beyond %s: %s",
+			s.lastSampleLogged.Format(time.RFC3339Nano),
+			v.Timestamp.Format(time.RFC3339Nano),
+		)
+	}
+	due := s.logInterval == 0 ||
+		s.lastSampleLogged.IsZero() ||
+		!v.Timestamp.Before(s.lastSampleLogged.Add(s.logInterval))
+	if !due {
+		copyValue := clonePowerSample(v)
+		s.pendingSample = &copyValue
+		return nil
+	}
+
+	err := s.writeSampleLocked(v)
+	if s.lastSampleLogged.Equal(v.Timestamp) {
+		s.pendingSample = nil
+	} else {
+		copyValue := clonePowerSample(v)
+		s.pendingSample = &copyValue
+	}
+	return err
+}
+
+func (s *SessionStore) writeSampleLocked(v model.PowerSample) error {
 	if err := s.samples.write(v); err != nil {
 		return fmt.Errorf("write sample JSONL: %w", err)
 	}
+	// samples.jsonl is the canonical sample stream. Advance its durable gate
+	// immediately so a later app-row or optional-mirror failure cannot cause a
+	// duplicate canonical sample on the next offer.
+	s.lastSampleLogged = v.Timestamp
 	for _, app := range v.Attribution.Apps {
 		if err := s.apps.write(app); err != nil {
 			return fmt.Errorf("write app JSONL: %w", err)
@@ -223,6 +311,30 @@ func (s *SessionStore) WriteSample(v model.PowerSample) error {
 		}
 	}
 	return nil
+}
+
+// FlushPendingSample durably writes the latest pending live sample regardless
+// of cadence. It is reserved for semantic boundaries, not periodic buffer
+// flushing, so a slow log cadence cannot accidentally become a two-second one.
+func (s *SessionStore) FlushPendingSample() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	return s.flushPendingSampleLocked()
+}
+
+func (s *SessionStore) flushPendingSampleLocked() error {
+	if s.pendingSample == nil {
+		return nil
+	}
+	pending := clonePowerSample(*s.pendingSample)
+	err := s.writeSampleLocked(pending)
+	if s.lastSampleLogged.Equal(pending.Timestamp) {
+		s.pendingSample = nil
+	}
+	return err
 }
 
 func (s *SessionStore) WriteEvent(v model.Event) error {
@@ -282,6 +394,9 @@ func (s *SessionStore) Snapshot() (SessionSnapshot, error) {
 	defer s.mu.Unlock()
 
 	if !s.closed {
+		if err := s.flushPendingSampleLocked(); err != nil {
+			return SessionSnapshot{}, fmt.Errorf("flush pending session sample: %w", err)
+		}
 		if err := errors.Join(
 			s.samples.flush(),
 			s.apps.flush(),
@@ -358,10 +473,12 @@ func (s *SessionStore) Close() error {
 	if s.closed {
 		return nil
 	}
+	pendingErr := s.flushPendingSampleLocked()
 	s.closed = true
 	s.Session.EndedAt = time.Now()
 
 	var errs []error
+	errs = append(errs, pendingErr)
 	errs = append(errs, s.writeSession())
 	errs = append(errs,
 		s.samples.close(),
@@ -373,6 +490,20 @@ func (s *SessionStore) Close() error {
 		errs = append(errs, s.sqlite.close())
 	}
 	return errors.Join(errs...)
+}
+
+func clonePowerSample(value model.PowerSample) model.PowerSample {
+	value.Components.Clusters = append([]model.ClusterSample(nil), value.Components.Clusters...)
+	value.Attribution.Apps = append([]model.AppPower(nil), value.Attribution.Apps...)
+	if value.CollectorStatus != nil {
+		statuses := make(map[string]string, len(value.CollectorStatus))
+		for key, item := range value.CollectorStatus {
+			statuses[key] = item
+		}
+		value.CollectorStatus = statuses
+	}
+	value.Warnings = append([]string(nil), value.Warnings...)
+	return value
 }
 
 func (s *SessionStore) writeSession() error {

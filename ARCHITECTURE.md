@@ -10,6 +10,8 @@
 6. `internal/report` and `internal/archive` consume stable contracts without collector dependencies.
 7. `internal/server` exposes a loopback-only, bearer-token API to SwiftUI.
 8. `internal/tui` renders the terminal dashboard.
+9. `internal/config` owns the versioned runtime-settings contract, presets, strict validation, and private atomic persistence.
+10. `internal/priority` owns ordinary macOS niceness and benchmark-child normalization; it exposes no real-time scheduling policy.
 
 Dependencies point inward toward models and contracts. Collectors do not own reporting, benchmark plans do not parse sensor formats, and the SwiftUI app never reads privileged sensors directly.
 
@@ -33,3 +35,13 @@ Attribution is explicitly estimated, bounded, streaming, and confidence-labelled
 ## Persistence
 
 Canonical records are append-only JSONL. Session metadata and summaries use atomic JSON replacement. SQLite is an optional query mirror, not the source of truth. This allows recovery if SQLite is missing or a process is interrupted.
+
+Live publication and durable persistence are separate paths. The monitor publishes only the latest unread live frame. The store writes the first sample and cadence-due samples, retaining one deep-copied latest pending sample between durable writes. Periodic buffer flushes do not publish that pending sample. Report snapshots, shutdown, runtime-profile restarts, and benchmark phase boundaries explicitly flush it.
+
+Live-only sessions still persist session metadata, events, and benchmark results, but leave canonical power-sample and app-attribution logs empty.
+
+## Runtime settings and restart ownership
+
+The effective `macpowerlab.runtime_settings.v1` document is embedded in every new monitoring session. CLI monitoring commands load `<data-dir>/runtime-settings.json` before applying explicit flags. The SwiftUI app reads and updates the same settings through authenticated loopback endpoints.
+
+The server serializes monitor, benchmark, and settings transitions. It rejects settings changes during an active benchmark. A settings change while monitoring flushes and closes the old session, starts a new monitor with the requested configuration, atomically persists the settings, and publishes the new monitor. A failed start or persistence attempt makes a best-effort rollback to the previous configuration in another fresh session; samples from different effective configurations are never appended to one session.

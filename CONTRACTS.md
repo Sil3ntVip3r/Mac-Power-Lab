@@ -11,8 +11,11 @@ The canonical schema version is `v1`. Contract files live in `contracts/v1` and 
 - `macpowerlab.session_summary.v1`
 - `macpowerlab.report_artifact.v1`
 - `macpowerlab.parity_report.v1`
+- `macpowerlab.runtime_settings.v1`
 
 Changes that remove or reinterpret existing fields require a new schema version. Additive optional fields may be introduced within v1. JSONL is the canonical streaming format; reports and SQLite are derived views.
+
+`macpowerlab.session.v1` now permits the additive `runtime_settings` property. New monitoring sessions always include it; readers of older session documents must continue to accept its absence. The standalone settings schema is strict and rejects unknown fields, invalid profile identifiers, out-of-range values, and inconsistent logging state.
 
 ## Timestamped cumulative reports
 
