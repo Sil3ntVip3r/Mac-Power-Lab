@@ -36,6 +36,10 @@
     {
       "file": "parity_report.schema.json",
       "schema": "macpowerlab.parity_report.v1"
+    },
+    {
+      "file": "runtime_settings.schema.json",
+      "schema": "macpowerlab.runtime_settings.v1"
     }
   ]
 }

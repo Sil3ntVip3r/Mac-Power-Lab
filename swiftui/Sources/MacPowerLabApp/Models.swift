@@ -284,6 +284,94 @@ struct PowerSample: Codable {
     }
 }
 
+struct RuntimeSettings: Codable, Equatable {
+    static let schemaVersion = "macpowerlab.runtime_settings.v1"
+    static let customProfile = "custom"
+
+    var schema: String
+    var profile: String
+    var uiRefreshMS: Int64
+    var batteryCollectionMS: Int64
+    var powermetricsMS: Int64
+    var appAttributionMS: Int64
+    var loggingEnabled: Bool
+    var logIntervalMS: Int64
+    var processNice: Int
+
+    enum CodingKeys: String, CodingKey {
+        case schema, profile
+        case uiRefreshMS = "ui_refresh_ms"
+        case batteryCollectionMS = "battery_collection_ms"
+        case powermetricsMS = "powermetrics_ms"
+        case appAttributionMS = "app_attribution_ms"
+        case loggingEnabled = "logging_enabled"
+        case logIntervalMS = "log_interval_ms"
+        case processNice = "process_nice"
+    }
+
+    static let compatibilityDefault = RuntimeSettings(
+        schema: schemaVersion,
+        profile: "default",
+        uiRefreshMS: 1_000,
+        batteryCollectionMS: 1_000,
+        powermetricsMS: 2_000,
+        appAttributionMS: 10_000,
+        loggingEnabled: true,
+        logIntervalMS: 1_000,
+        processNice: 0
+    )
+
+    var validationMessage: String? {
+        guard schema == Self.schemaVersion else {
+            return "Unsupported runtime settings schema."
+        }
+        guard (500...60_000).contains(uiRefreshMS) else {
+            return "UI refresh must be between 500 ms and 60 seconds."
+        }
+        guard (500...60_000).contains(batteryCollectionMS) else {
+            return "Battery collection must be between 500 ms and 60 seconds."
+        }
+        guard (1_000...60_000).contains(powermetricsMS) else {
+            return "powermetrics must be between 1 and 60 seconds."
+        }
+        guard (2_000...60_000).contains(appAttributionMS) else {
+            return "App attribution must be between 2 and 60 seconds."
+        }
+        if loggingEnabled {
+            guard (500...60_000).contains(logIntervalMS) else {
+                return "Logging must be between 500 ms and 60 seconds."
+            }
+        } else if logIntervalMS != 0 {
+            return "Logging interval must be zero when durable logging is off."
+        }
+        guard (-5...10).contains(processNice) else {
+            return "Process nice must be between -5 and +10."
+        }
+        return nil
+    }
+}
+
+struct RuntimeProfileDefinition: Codable, Identifiable {
+    let id: String
+    let name: String
+    let description: String
+    let settings: RuntimeSettings
+}
+
+struct EffectiveCollectionOptions: Codable {
+    let appAttribution: Bool
+    let topApps: Int
+    let sqliteMirror: Bool
+    let safeMode: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case appAttribution = "app_attribution"
+        case topApps = "top_apps"
+        case sqliteMirror = "sqlite_mirror"
+        case safeMode = "safe_mode"
+    }
+}
+
 struct Session: Codable {
     let id: String
     let version: String
@@ -295,6 +383,8 @@ struct Session: Codable {
     let machine: String?
     let chip: String?
     let dataDirectory: String?
+    let runtimeSettings: RuntimeSettings?
+    let effectiveOptions: EffectiveCollectionOptions?
     let metadata: [String: String]?
 
     enum CodingKeys: String, CodingKey {
@@ -304,6 +394,8 @@ struct Session: Codable {
         case osVersion = "os_version"
         case osBuild = "os_build"
         case dataDirectory = "data_directory"
+        case runtimeSettings = "runtime_settings"
+        case effectiveOptions = "effective_options"
     }
 }
 

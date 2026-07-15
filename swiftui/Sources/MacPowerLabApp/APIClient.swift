@@ -41,6 +41,27 @@ actor APIClient {
         try await request(path: "/monitor/stop", method: "POST", body: Data("{}".utf8))
     }
 
+    func runtimeSettings() async throws -> RuntimeSettings {
+        try await request(path: "/settings", method: "GET", body: Optional<Data>.none)
+    }
+
+    func runtimeProfiles() async throws -> [RuntimeProfileDefinition] {
+        try await request(path: "/settings/profiles", method: "GET", body: Optional<Data>.none)
+    }
+
+    func updateRuntimeSettings(_ settings: RuntimeSettings) async throws -> RuntimeSettings {
+        let payload = try JSONEncoder().encode(settings)
+        // A valid settings change can flush storage, close one session, adjust
+        // niceness, and start another. Keep the client timeout above those
+        // individually bounded backend operations.
+        return try await request(
+            path: "/settings",
+            method: "PUT",
+            body: payload,
+            timeout: 90
+        )
+    }
+
     func benchmarks() async throws -> [BenchmarkDefinition] {
         try await request(path: "/benchmarks", method: "GET", body: Optional<Data>.none)
     }

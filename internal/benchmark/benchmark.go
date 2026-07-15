@@ -17,6 +17,7 @@ import (
 
 	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/execx"
 	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/model"
+	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/priority"
 	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/version"
 )
 
@@ -41,6 +42,7 @@ type Options struct {
 	ExtremeDuration   time.Duration
 	MemoryMB          int
 	GPUProfile        string
+	ProcessNice       int
 }
 
 // Monitor is the narrow benchmark-facing monitor contract. Depending on an
@@ -51,6 +53,7 @@ type Monitor interface {
 	Session() model.Session
 	SessionDir() string
 	SetPhase(string)
+	FlushPending() error
 	WriteTestRun(model.TestRun) error
 }
 
@@ -240,6 +243,9 @@ func (c *Controller) Run(ctx context.Context, plan Plan, opts Options) (runErr e
 	defer releaseSleepLock()
 
 	for index, originalPhase := range plan.Phases {
+		if err := c.manager.FlushPending(); err != nil {
+			return fmt.Errorf("flush samples before benchmark phase %d: %w", index+1, err)
+		}
 		runID := fmt.Sprintf(
 			"%s_%06d_%03d",
 			c.deps.now().UTC().Format("20060102_150405.000000000"),
@@ -276,6 +282,12 @@ func (c *Controller) Run(ctx context.Context, plan Plan, opts Options) (runErr e
 		}
 		c.manager.SetPhase(phase.Name)
 		phaseErr := c.runPhase(ctx, plan, index, phase, opts)
+		if flushErr := c.manager.FlushPending(); flushErr != nil {
+			phaseErr = errors.Join(
+				phaseErr,
+				fmt.Errorf("flush samples after benchmark phase %d: %w", index+1, flushErr),
+			)
+		}
 		testRun.EndedAt = c.deps.now()
 		testRun.ActualSeconds = testRun.EndedAt.Sub(started).Seconds()
 		switch {
@@ -443,7 +455,7 @@ func runWorkload(ctx context.Context, sessionDir string, phase Phase, opts Optio
 	if err != nil {
 		return err
 	}
-	return runCommands(ctx, sessionDir, phase.RunID, phase.Name, commands)
+	return runCommands(ctx, sessionDir, phase.RunID, phase.Name, commands, opts.ProcessNice)
 }
 
 func workloadCommands(phase Phase, opts Options) ([][]string, error) {
@@ -537,7 +549,12 @@ type workloadProcess struct {
 	err   chan error
 }
 
-func runCommands(ctx context.Context, sessionDir, runID, name string, commands [][]string) error {
+func runCommands(
+	ctx context.Context,
+	sessionDir, runID, name string,
+	commands [][]string,
+	processNice int,
+) error {
 	if len(commands) == 0 {
 		return errors.New("no workload commands")
 	}
@@ -586,7 +603,12 @@ func runCommands(ctx context.Context, sessionDir, runID, name string, commands [
 				cleanupStarted(),
 			)
 		}
-		cmd, stdout, stderr, err := execx.Start(runCtx, args[0], args[1:]...)
+		cmd, stdout, stderr, err := priority.StartNormalized(
+			runCtx,
+			processNice,
+			args[0],
+			args[1:]...,
+		)
 		if err != nil {
 			closeErr := logFile.Close()
 			return errors.Join(

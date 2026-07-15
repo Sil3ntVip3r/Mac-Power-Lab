@@ -83,7 +83,7 @@ func NewManager(cfg config.Config) (*Manager, error) {
 		attr:          attribution.New(cfg.TopApps),
 		processStatus: processStatus,
 		done:          make(chan struct{}),
-		samples:       make(chan model.PowerSample, 8),
+		samples:       make(chan model.PowerSample, 1),
 		errs:          make(chan error, 32),
 	}, nil
 }
@@ -118,8 +118,16 @@ func (m *Manager) Start(parent context.Context, metadata map[string]string) erro
 		return fmt.Errorf("prepare monitor configuration: %w", err)
 	}
 	ctx, cancel := context.WithCancel(parent)
-	session := buildSession(ctx, m.cfg.DataDir, metadata)
-	st, err := store.NewSession(m.cfg.DataDir, session, m.cfg.SQLite)
+	session := buildSession(ctx, m.cfg, metadata)
+	st, err := store.NewSessionWithOptions(
+		m.cfg.DataDir,
+		session,
+		store.SessionOptions{
+			SQLite:        m.cfg.SQLite,
+			SampleLogging: m.cfg.Runtime.LoggingEnabled,
+			LogInterval:   time.Duration(m.cfg.Runtime.LogIntervalMS) * time.Millisecond,
+		},
+	)
 	if err != nil {
 		cancel()
 		return fmt.Errorf("create monitor session: %w", err)
@@ -175,12 +183,18 @@ func (m *Manager) run(ctx context.Context) {
 		close(m.done)
 	}()
 
-	pm := NewPowermetricsCollector(m.cfg.PowermetricsInterval)
-	pmCh, pmErr := pm.Start(ctx)
+	pmInterval := time.Duration(m.cfg.Runtime.PowermetricsMS) * time.Millisecond
+	processInterval := time.Duration(m.cfg.Runtime.AppAttributionMS) * time.Millisecond
+	uiRefreshInterval := time.Duration(m.cfg.Runtime.UIRefreshMS) * time.Millisecond
+	batteryInterval := time.Duration(m.cfg.Runtime.BatteryCollectionMS) * time.Millisecond
+	loggingEnabled := m.cfg.Runtime.LoggingEnabled
+	logInterval := time.Duration(m.cfg.Runtime.LogIntervalMS) * time.Millisecond
 
-	batteryTicker := time.NewTicker(m.cfg.SampleInterval)
-	defer batteryTicker.Stop()
-	processTicker := time.NewTicker(m.cfg.ProcessInterval)
+	pm := NewPowermetricsCollector(pmInterval)
+	pmCh, pmErr := pm.Start(ctx)
+	batteryCh, batteryErr := startBatterySampler(ctx, batteryInterval)
+
+	processTicker := time.NewTicker(processInterval)
 	defer processTicker.Stop()
 	processInitial := time.NewTimer(750 * time.Millisecond)
 	defer processInitial.Stop()
@@ -247,6 +261,86 @@ func (m *Manager) run(ctx context.Context) {
 		}()
 	}
 
+	var latestBattery BatterySnapshot
+	haveBattery := false
+	emitSample := func(now time.Time, publishLive bool) {
+		if !haveBattery {
+			return
+		}
+		m.mu.RLock()
+		pmSnap := m.latestPM
+		phase := m.phase
+		session := m.session
+		processesAt := m.latestProcessesAt
+		processStatus := m.processStatus
+		processes := append([]model.ProcessActivity(nil), m.latestProcesses...)
+		m.mu.RUnlock()
+
+		if !sensorFresh(now, pmSnap.Timestamp, pmInterval) {
+			pmSnap = PowermetricsSnapshot{Status: "stale"}
+		}
+		if !sensorFresh(now, processesAt, processInterval) {
+			processes = nil
+			if processStatus != "unavailable" && processStatus != "disabled" {
+				processStatus = "stale"
+			}
+		}
+		statuses := make(map[string]string, len(latestBattery.Diagnostics.Status)+2)
+		for key, value := range latestBattery.Diagnostics.Status {
+			statuses[key] = value
+		}
+		statuses["powermetrics"] = pmSnap.Status
+		statuses["process_attribution"] = processStatus
+
+		sample := m.compose(
+			now, session.ID, phase,
+			latestBattery.Battery, latestBattery.Adapter,
+			pmSnap, processes, statuses, latestBattery.Diagnostics.Warnings,
+		)
+		if err := m.persist(sample); err != nil {
+			m.emitError(err)
+		}
+		if publishLive {
+			publishLatestSample(ctx, m.samples, sample)
+		}
+	}
+
+	// Live publication and durable sampling have independent deadlines. The
+	// single timer wakes for their union and composes once when they coincide.
+	// Every composed sample is offered to the store, whose cadence gate retains
+	// only the latest pending value between durable writes.
+	var (
+		sampleTimer  *time.Timer
+		sampleTimerC <-chan time.Time
+		nextLive     time.Time
+		nextLog      time.Time
+	)
+	defer func() {
+		if sampleTimer != nil {
+			sampleTimer.Stop()
+		}
+	}()
+	resetSampleTimer := func() {
+		deadline := nextSampleDeadline(nextLive, nextLog, loggingEnabled)
+		delay := time.Until(deadline)
+		if delay < 0 {
+			delay = 0
+		}
+		if sampleTimer == nil {
+			sampleTimer = time.NewTimer(delay)
+			sampleTimerC = sampleTimer.C
+			return
+		}
+		sampleTimer.Reset(delay)
+	}
+	startSampleSchedule := func(now time.Time) {
+		nextLive = now.Add(uiRefreshInterval)
+		if loggingEnabled {
+			nextLog = now.Add(logInterval)
+		}
+		resetSampleTimer()
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -267,6 +361,27 @@ func (m *Manager) run(ctx context.Context) {
 			if err != nil {
 				m.emitError(err)
 			}
+		case snapshot, ok := <-batteryCh:
+			if !ok {
+				batteryCh = nil
+				continue
+			}
+			first := !haveBattery
+			latestBattery = snapshot
+			haveBattery = true
+			if first {
+				now := time.Now()
+				emitSample(now, true)
+				startSampleSchedule(now)
+			}
+		case err, ok := <-batteryErr:
+			if !ok {
+				batteryErr = nil
+				continue
+			}
+			if err != nil {
+				m.emitError(err)
+			}
 		case <-processInitial.C:
 			launchProcessCollection()
 		case <-processTicker.C:
@@ -281,52 +396,100 @@ func (m *Manager) run(ctx context.Context) {
 			if !hasProcesses {
 				launchProcessCollection()
 			}
-		case now := <-batteryTicker.C:
-			c, cancel := context.WithTimeout(ctx, 5*time.Second)
-			batterySnapshot, err := (BatteryCollector{}).CollectDetailed(c)
+		case <-sampleTimerC:
+			now := time.Now()
+			publishLive := !now.Before(nextLive)
+			emitSample(now, publishLive)
+			if publishLive {
+				nextLive = advanceDeadline(nextLive, uiRefreshInterval, now)
+			}
+			if loggingEnabled && !now.Before(nextLog) {
+				nextLog = advanceDeadline(nextLog, logInterval, now)
+			}
+			resetSampleTimer()
+		}
+	}
+}
+
+func nextSampleDeadline(nextLive, nextLog time.Time, loggingEnabled bool) time.Time {
+	if loggingEnabled && nextLog.Before(nextLive) {
+		return nextLog
+	}
+	return nextLive
+}
+
+func advanceDeadline(deadline time.Time, interval time.Duration, now time.Time) time.Time {
+	if deadline.After(now) {
+		return deadline
+	}
+	missed := now.Sub(deadline)/interval + 1
+	return deadline.Add(missed * interval)
+}
+
+func startBatterySampler(
+	ctx context.Context,
+	interval time.Duration,
+) (<-chan BatterySnapshot, <-chan error) {
+	out := make(chan BatterySnapshot, 1)
+	errCh := make(chan error, 8)
+	go func() {
+		defer close(out)
+		defer close(errCh)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		collect := func() {
+			collectionCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			snapshot, err := (BatteryCollector{}).CollectDetailed(collectionCtx)
 			cancel()
 			if err != nil {
-				m.emitError(err)
-				continue
+				nonblockErr(errCh, err)
+				return
 			}
-			m.mu.RLock()
-			pmSnap := m.latestPM
-			phase := m.phase
-			session := m.session
-			processesAt := m.latestProcessesAt
-			processStatus := m.processStatus
-			processes := append([]model.ProcessActivity(nil), m.latestProcesses...)
-			m.mu.RUnlock()
-
-			if !sensorFresh(now, pmSnap.Timestamp, m.cfg.PowermetricsInterval) {
-				pmSnap = PowermetricsSnapshot{Status: "stale"}
-			}
-			if !sensorFresh(now, processesAt, m.cfg.ProcessInterval) {
-				processes = nil
-				if processStatus != "unavailable" {
-					processStatus = "stale"
-				}
-			}
-			statuses := make(map[string]string, len(batterySnapshot.Diagnostics.Status)+2)
-			for key, value := range batterySnapshot.Diagnostics.Status {
-				statuses[key] = value
-			}
-			statuses["powermetrics"] = pmSnap.Status
-			statuses["process_attribution"] = processStatus
-
-			sample := m.compose(
-				now, session.ID, phase,
-				batterySnapshot.Battery, batterySnapshot.Adapter,
-				pmSnap, processes, statuses, batterySnapshot.Diagnostics.Warnings,
-			)
-			if err := m.persist(sample); err != nil {
-				m.emitError(err)
-			}
+			publishLatestBattery(ctx, out, snapshot)
+		}
+		collect()
+		for {
 			select {
-			case m.samples <- sample:
-			default:
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				collect()
 			}
 		}
+	}()
+	return out, errCh
+}
+
+func publishLatestBattery(ctx context.Context, out chan BatterySnapshot, snapshot BatterySnapshot) {
+	select {
+	case out <- snapshot:
+		return
+	default:
+	}
+	select {
+	case <-out:
+	default:
+	}
+	select {
+	case out <- snapshot:
+	case <-ctx.Done():
+	}
+}
+
+func publishLatestSample(ctx context.Context, out chan model.PowerSample, sample model.PowerSample) {
+	select {
+	case out <- sample:
+		return
+	default:
+	}
+	select {
+	case <-out:
+	default:
+	}
+	select {
+	case out <- sample:
+	case <-ctx.Done():
 	}
 }
 
@@ -476,7 +639,7 @@ func (m *Manager) persist(s model.PowerSample) error {
 	if st == nil {
 		return errors.New("session store unavailable")
 	}
-	return st.WriteSample(s)
+	return st.OfferSample(s)
 }
 
 func (m *Manager) emitError(err error) {
@@ -570,6 +733,18 @@ func (m *Manager) Snapshot() (store.SessionSnapshot, error) {
 		return store.SessionSnapshot{}, errors.New("session store unavailable")
 	}
 	return st.Snapshot()
+}
+
+// FlushPending durably records the latest pending live sample at a semantic
+// boundary without changing the configured steady-state log cadence.
+func (m *Manager) FlushPending() error {
+	m.mu.RLock()
+	st := m.store
+	m.mu.RUnlock()
+	if st == nil {
+		return errors.New("session store unavailable")
+	}
+	return st.FlushPendingSample()
 }
 func (m *Manager) WriteTestRun(v model.TestRun) error {
 	m.mu.RLock()
@@ -746,18 +921,25 @@ func uniqueSessionID(now time.Time) string {
 	return fmt.Sprintf("%s_%d", now.Format("20060102_150405.000000"), os.Getpid())
 }
 
-func buildSession(ctx context.Context, data string, metadata map[string]string) model.Session {
+func buildSession(ctx context.Context, cfg config.Config, metadata map[string]string) model.Session {
 	now := time.Now()
 	id := uniqueSessionID(now)
 	host, _ := os.Hostname()
 	session := model.Session{
-		Schema:        version.SessionSchema,
-		ID:            id,
-		Version:       version.Version,
-		StartedAt:     now,
-		Hostname:      host,
-		DataDirectory: data,
-		Metadata:      metadata,
+		Schema:          version.SessionSchema,
+		ID:              id,
+		Version:         version.Version,
+		StartedAt:       now,
+		Hostname:        host,
+		DataDirectory:   cfg.DataDir,
+		RuntimeSettings: cfg.Runtime,
+		EffectiveOptions: &model.EffectiveCollectionOptions{
+			AppAttribution: cfg.AppAttribution,
+			TopApps:        cfg.TopApps,
+			SQLiteMirror:   cfg.SQLite,
+			SafeMode:       cfg.SafeMode,
+		},
+		Metadata: cloneStringMap(metadata),
 	}
 	if runtime.GOOS != "darwin" {
 		return session

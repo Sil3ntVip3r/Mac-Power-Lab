@@ -99,6 +99,8 @@ type fakeMonitor struct {
 	phase    string
 	runs     []model.TestRun
 	writeErr error
+	flushes  int
+	flushErr error
 }
 
 func (f *fakeMonitor) LastSample() *model.PowerSample {
@@ -116,6 +118,12 @@ func (f *fakeMonitor) SetPhase(value string) {
 	f.mu.Lock()
 	f.phase = value
 	f.mu.Unlock()
+}
+func (f *fakeMonitor) FlushPending() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.flushes++
+	return f.flushErr
 }
 func (f *fakeMonitor) WriteTestRun(value model.TestRun) error {
 	f.mu.Lock()
@@ -280,5 +288,60 @@ func TestWorkloadCommandsAreRecordedAndRunIDIsUniqueLogNamespace(t *testing.T) {
 	}
 	if len(commands) != 1 || commands[0][0] != "/tmp/bin/cpu_stress" || commands[0][1] != "5" {
 		t.Fatalf("commands=%v", commands)
+	}
+}
+
+func TestControllerFlushesSamplesAroundEveryPhase(t *testing.T) {
+	monitor := &fakeMonitor{
+		sample:  &model.PowerSample{Battery: model.BatterySample{PowerSource: "Battery Power"}},
+		session: model.Session{ID: "session"},
+		dir:     t.TempDir(),
+	}
+	controller := newController(
+		monitor,
+		testControllerDependencies(func(context.Context, string, Phase, Options) error {
+			return nil
+		}),
+	)
+	plan := Plan{Name: "test", Phases: []Phase{
+		{Name: "one", Kind: "cpu", Duration: time.Second},
+		{Name: "two", Kind: "gpu", Duration: time.Second},
+	}}
+	if err := controller.Run(context.Background(), plan, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	monitor.mu.Lock()
+	flushes := monitor.flushes
+	phase := monitor.phase
+	monitor.mu.Unlock()
+	if flushes != 4 {
+		t.Fatalf("flushes=%d want=4", flushes)
+	}
+	if phase != "" {
+		t.Fatalf("phase=%q want empty", phase)
+	}
+}
+
+func TestControllerDoesNotTransitionPhaseWhenBoundaryFlushFails(t *testing.T) {
+	monitor := &fakeMonitor{
+		sample:   &model.PowerSample{Battery: model.BatterySample{PowerSource: "Battery Power"}},
+		session:  model.Session{ID: "session"},
+		dir:      t.TempDir(),
+		flushErr: errors.New("disk full"),
+	}
+	controller := newController(
+		monitor,
+		testControllerDependencies(func(context.Context, string, Phase, Options) error {
+			t.Fatal("workload started after boundary flush failed")
+			return nil
+		}),
+	)
+	err := controller.Run(
+		context.Background(),
+		Plan{Name: "test", Phases: []Phase{{Name: "phase", Kind: "cpu", Duration: time.Second}}},
+		Options{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "flush samples before") {
+		t.Fatalf("err=%v", err)
 	}
 }

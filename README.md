@@ -22,6 +22,8 @@ It combines a highly concurrent **Go engine**, native CPU/memory/Metal workloads
 - Validated custom benchmark builder
 - Canonical JSONL storage, optional SQLite mirror, HTML/Markdown reports, comparisons, and compressed archives
 - Terminal UI, CLI, authenticated loopback API, and native SwiftUI dashboard
+- Versioned runtime profiles with independent live, sensor, attribution, and durable-log cadences
+- Live-only monitoring and ordinary process nice control without real-time scheduling
 - Frozen legacy Python/zsh implementation for parity and rollback
 
 ## Requirements
@@ -58,6 +60,18 @@ The bootstrap removes quarantine only from this project directory, builds and ad
 
 # Low-overhead diagnostic monitor
 ./bin/macpowerlab monitor --safe
+
+# Use a persisted or named runtime profile
+./bin/macpowerlab monitor --profile balanced
+
+# Keep a responsive live view while logging only every 10 seconds
+./bin/macpowerlab monitor \
+  --ui-refresh 500ms \
+  --battery-interval 1s \
+  --log-interval 10s
+
+# Live view with durable power/app sample logging disabled
+./bin/macpowerlab monitor --profile live-only
 
 # List benchmark presets
 ./bin/macpowerlab benchmark list
@@ -111,6 +125,7 @@ See:
 - [Architecture](ARCHITECTURE.md)
 - [Build on macOS](BUILD_ON_MAC.md)
 - [Data contracts](CONTRACTS.md)
+- [Runtime settings](RUNTIME_SETTINGS.md)
 - [Security](SECURITY.md)
 - [Validation](VALIDATION.md)
 - [Migration history](MIGRATION_PHASES.md)
@@ -150,3 +165,11 @@ Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before openin
 ## License
 
 Mac Power Lab is available under the [MIT License](LICENSE).
+
+
+## Product direction
+
+See [`docs/product/PRODUCT_VISION.md`](docs/product/PRODUCT_VISION.md),
+[`docs/product/UX_PRINCIPLES.md`](docs/product/UX_PRINCIPLES.md),
+[`docs/product/PRIVACY_PRINCIPLES.md`](docs/product/PRIVACY_PRINCIPLES.md), and
+[`docs/ROADMAP.md`](docs/ROADMAP.md).

@@ -29,7 +29,7 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Race detector
-        run: go test -race -count=1 -timeout=180s ./internal/server ./internal/collector ./internal/benchmark ./internal/store ./internal/attribution
+        run: go test -race -count=1 -timeout=180s ./internal/server ./internal/collector ./internal/benchmark ./internal/store ./internal/attribution ./internal/config ./internal/priority
       - name: Cross-build Darwin
         run: |
           CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build ./cmd/macpowerlab
@@ -42,3 +42,5 @@ jobs:
       - uses: actions/checkout@v4
       - name: Parse Swift sources
         run: swiftc -frontend -parse swiftui/Sources/MacPowerLabApp/*.swift
+      - name: Build native SwiftUI executable
+        run: swift build --package-path swiftui

@@ -25,6 +25,7 @@ import (
 	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/config"
 	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/execx"
 	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/model"
+	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/priority"
 	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/report"
 	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/store"
 	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/version"
@@ -39,6 +40,7 @@ type monitor interface {
 	benchmark.Monitor
 	Start(context.Context, map[string]string) error
 	Stop(context.Context) error
+	FlushPending() error
 	Snapshot() (store.SessionSnapshot, error)
 }
 
@@ -51,6 +53,8 @@ type engineDependencies struct {
 	newMonitor   func(config.Config) (monitor, error)
 	newBenchmark func(benchmark.Monitor) benchmarkRunner
 	ensureSudo   func(context.Context, bool) error
+	setPriority  func(context.Context, int) error
+	saveSettings func(string, model.RuntimeSettings) error
 }
 
 func defaultDependencies() engineDependencies {
@@ -61,9 +65,19 @@ func defaultDependencies() engineDependencies {
 		newBenchmark: func(value benchmark.Monitor) benchmarkRunner {
 			return benchmark.New(value)
 		},
-		ensureSudo: execx.EnsureSudo,
+		ensureSudo:   execx.EnsureSudo,
+		setPriority:  priority.Set,
+		saveSettings: config.SaveRuntimeSettings,
 	}
 }
+
+// ErrBenchmarkRunning prevents an implicit benchmark cancellation during a
+// settings-driven monitor restart.
+var ErrBenchmarkRunning = errors.New("cannot apply runtime settings while a benchmark is running")
+
+// ErrHistoricalLoggingDisabled prevents an empty or misleading historical
+// report from being generated for a live-only session.
+var ErrHistoricalLoggingDisabled = errors.New("durable logging is disabled; enable logging before generating a historical report")
 
 type benchmarkRun struct {
 	id     uint64
@@ -128,22 +142,51 @@ func (e *Engine) StartMonitor(ctx context.Context) error {
 func (e *Engine) startMonitorLocked(startupCtx context.Context) error {
 	e.mu.RLock()
 	alreadyRunning := e.manager != nil
+	cfg := e.cfg
 	e.mu.RUnlock()
 	if alreadyRunning {
 		return nil
 	}
+	manager, controller, monitorCancel, err := e.startMonitorComponentsLocked(
+		startupCtx,
+		cfg,
+		map[string]string{"mode": "api"},
+	)
+	if err != nil {
+		return err
+	}
+	e.publishMonitor(manager, controller, monitorCancel)
+	return nil
+}
 
+func (e *Engine) startMonitorComponentsLocked(
+	startupCtx context.Context,
+	cfg config.Config,
+	metadata map[string]string,
+) (monitor, benchmarkRunner, context.CancelFunc, error) {
+	if startupCtx == nil {
+		return nil, nil, nil, errors.New("start-monitor context must not be nil")
+	}
+	if err := startupCtx.Err(); err != nil {
+		return nil, nil, nil, fmt.Errorf("start-monitor context is done: %w", err)
+	}
 	if runtime.GOOS == "darwin" {
 		sudoCtx, cancel := context.WithTimeout(startupCtx, 10*time.Second)
 		err := e.deps.ensureSudo(sudoCtx, false)
 		cancel()
 		if err != nil {
-			return err
+			return nil, nil, nil, err
 		}
 	}
-	manager, err := e.deps.newMonitor(e.cfg)
+	priorityCtx, priorityCancel := context.WithTimeout(startupCtx, 15*time.Second)
+	err := e.deps.setPriority(priorityCtx, cfg.Runtime.ProcessNice)
+	priorityCancel()
 	if err != nil {
-		return fmt.Errorf("create monitor: %w", err)
+		return nil, nil, nil, fmt.Errorf("apply process nice %d: %w", cfg.Runtime.ProcessNice, err)
+	}
+	manager, err := e.deps.newMonitor(cfg)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("create monitor: %w", err)
 	}
 
 	root := e.rootCtx
@@ -151,22 +194,28 @@ func (e *Engine) startMonitorLocked(startupCtx context.Context) error {
 		root = startupCtx
 	}
 	if err := root.Err(); err != nil {
-		return fmt.Errorf("engine context is done: %w", err)
+		return nil, nil, nil, fmt.Errorf("engine context is done: %w", err)
 	}
 	monitorCtx, monitorCancel := context.WithCancel(root)
-	if err := manager.Start(monitorCtx, map[string]string{"mode": "api"}); err != nil {
+	if err := manager.Start(monitorCtx, metadata); err != nil {
 		monitorCancel()
-		return fmt.Errorf("start monitor: %w", err)
+		return nil, nil, nil, fmt.Errorf("start monitor: %w", err)
 	}
 	controller := e.deps.newBenchmark(manager)
+	return manager, controller, monitorCancel, nil
+}
 
+func (e *Engine) publishMonitor(
+	manager monitor,
+	controller benchmarkRunner,
+	monitorCancel context.CancelFunc,
+) {
 	e.mu.Lock()
 	e.manager = manager
 	e.bench = controller
 	e.monitorCancel = monitorCancel
 	e.lastSession = manager.SessionDir()
 	e.mu.Unlock()
-	return nil
 }
 
 func (e *Engine) StopMonitor(ctx context.Context) error {
@@ -179,12 +228,19 @@ func (e *Engine) StopMonitor(ctx context.Context) error {
 	if err := e.stopBenchmarkLocked(ctx); err != nil {
 		return err
 	}
+	return e.stopMonitorOnlyLocked(ctx)
+}
+
+func (e *Engine) stopMonitorOnlyLocked(ctx context.Context) error {
 	e.mu.RLock()
 	manager := e.manager
 	cancel := e.monitorCancel
 	e.mu.RUnlock()
 	if manager == nil {
 		return nil
+	}
+	if err := manager.FlushPending(); err != nil {
+		return fmt.Errorf("flush pending monitor sample: %w", err)
 	}
 	if cancel != nil {
 		cancel()
@@ -204,6 +260,161 @@ func (e *Engine) StopMonitor(ctx context.Context) error {
 	}
 	e.mu.Unlock()
 	return nil
+}
+
+// RuntimeSettings returns the current effective settings, including startup
+// CLI overrides that were applied after persisted settings were loaded.
+func (e *Engine) RuntimeSettings() model.RuntimeSettings {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.cfg.Runtime
+}
+
+// RuntimeProfiles returns the complete stable preset catalog.
+func (e *Engine) RuntimeProfiles() []config.ProfileDefinition {
+	return config.Profiles()
+}
+
+// ApplyRuntimeSettings persists settings atomically and, when monitoring is
+// active, moves collection to a fresh session. A benchmark is never cancelled
+// implicitly. The new document is published before the restart so a persistence
+// failure cannot leave an untracked replacement monitor running. Any failed
+// restart restores the previous document before attempting a rollback session.
+func (e *Engine) ApplyRuntimeSettings(
+	ctx context.Context,
+	settings model.RuntimeSettings,
+) (bool, error) {
+	if ctx == nil {
+		return false, errors.New("settings context must not be nil")
+	}
+	if err := config.ValidateRuntimeSettings(settings); err != nil {
+		return false, err
+	}
+	e.lifecycle.Lock()
+	defer e.lifecycle.Unlock()
+
+	e.mu.RLock()
+	oldCfg := e.cfg
+	manager := e.manager
+	run := e.run
+	e.mu.RUnlock()
+	if run != nil {
+		return false, ErrBenchmarkRunning
+	}
+	if config.RuntimeSettingsEqual(oldCfg.Runtime, settings) {
+		if err := e.deps.saveSettings(oldCfg.DataDir, settings); err != nil {
+			return false, fmt.Errorf("persist runtime settings: %w", err)
+		}
+		return false, nil
+	}
+
+	newCfg := oldCfg
+	newCfg.Runtime = settings
+	if manager == nil {
+		if runtime.GOOS == "darwin" && settings.ProcessNice < oldCfg.Runtime.ProcessNice {
+			sudoCtx, sudoCancel := context.WithTimeout(ctx, 10*time.Second)
+			sudoErr := e.deps.ensureSudo(sudoCtx, false)
+			sudoCancel()
+			if sudoErr != nil {
+				return false, fmt.Errorf("refresh sudo credentials for process priority: %w", sudoErr)
+			}
+		}
+		priorityCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		priorityErr := e.deps.setPriority(priorityCtx, settings.ProcessNice)
+		cancel()
+		if priorityErr != nil {
+			return false, fmt.Errorf("apply process nice %d: %w", settings.ProcessNice, priorityErr)
+		}
+		if err := e.deps.saveSettings(oldCfg.DataDir, settings); err != nil {
+			restoreCtx, restoreCancel := context.WithTimeout(context.Background(), 15*time.Second)
+			restoreErr := e.deps.setPriority(restoreCtx, oldCfg.Runtime.ProcessNice)
+			restoreCancel()
+			persistRestoreErr := e.deps.saveSettings(oldCfg.DataDir, oldCfg.Runtime)
+			return false, errors.Join(
+				fmt.Errorf("persist runtime settings: %w", err),
+				wrapOptional("restore prior process nice", restoreErr),
+				wrapOptional("restore prior persisted runtime settings", persistRestoreErr),
+			)
+		}
+		e.mu.Lock()
+		e.cfg = newCfg
+		e.mu.Unlock()
+		return false, nil
+	}
+
+	oldSession := manager.Session()
+
+	// Persist before stopping the active monitor. This makes persistence failure
+	// side-effect free and removes the dangerous state where an unpersisted
+	// replacement monitor must be stopped before rollback can begin.
+	if err := e.deps.saveSettings(oldCfg.DataDir, settings); err != nil {
+		return false, fmt.Errorf("persist runtime settings before restart: %w", err)
+	}
+
+	if err := e.stopMonitorOnlyLocked(ctx); err != nil {
+		persistRestoreErr := e.deps.saveSettings(oldCfg.DataDir, oldCfg.Runtime)
+		return false, errors.Join(
+			fmt.Errorf("stop monitor for settings restart: %w", err),
+			wrapOptional("restore prior persisted runtime settings", persistRestoreErr),
+		)
+	}
+
+	metadata := map[string]string{
+		"mode":                "api",
+		"restart_reason":      "runtime_settings",
+		"previous_session_id": oldSession.ID,
+	}
+	newManager, newBenchmark, newCancel, err := e.startMonitorComponentsLocked(
+		ctx,
+		newCfg,
+		metadata,
+	)
+	if err != nil {
+		persistRestoreErr := e.deps.saveSettings(oldCfg.DataDir, oldCfg.Runtime)
+		return false, e.restorePreviousMonitorLocked(
+			oldCfg,
+			oldSession.ID,
+			errors.Join(
+				fmt.Errorf("start monitor with new runtime settings: %w", err),
+				wrapOptional("restore prior persisted runtime settings", persistRestoreErr),
+			),
+		)
+	}
+
+	e.mu.Lock()
+	e.cfg = newCfg
+	e.mu.Unlock()
+	e.publishMonitor(newManager, newBenchmark, newCancel)
+	return true, nil
+}
+
+func (e *Engine) restorePreviousMonitorLocked(
+	oldCfg config.Config,
+	previousSessionID string,
+	cause error,
+) error {
+	restoreCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	manager, controller, monitorCancel, restoreErr := e.startMonitorComponentsLocked(
+		restoreCtx,
+		oldCfg,
+		map[string]string{
+			"mode":                "api",
+			"restart_reason":      "runtime_settings_rollback",
+			"previous_session_id": previousSessionID,
+		},
+	)
+	if restoreErr == nil {
+		e.publishMonitor(manager, controller, monitorCancel)
+	}
+	return errors.Join(cause, wrapOptional("restore previous monitor configuration", restoreErr))
+}
+
+func wrapOptional(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }
 
 func (e *Engine) StartBenchmark(ctx context.Context, name string, duration time.Duration) error {
@@ -239,6 +450,7 @@ func (e *Engine) startPlan(ctx context.Context, plan benchmark.Plan) error {
 		return errors.New("benchmark already running")
 	}
 	controller := e.bench
+	cfg := e.cfg
 	root := e.rootCtx
 	if root == nil {
 		root = ctx
@@ -258,9 +470,10 @@ func (e *Engine) startPlan(ctx context.Context, plan benchmark.Plan) error {
 			benchmarkCtx,
 			plan,
 			benchmark.Options{
-				NativeDir:  e.cfg.NativeDir,
-				BinDir:     e.cfg.NativeBinDir,
-				GPUProfile: "high",
+				NativeDir:   cfg.NativeDir,
+				BinDir:      cfg.NativeBinDir,
+				GPUProfile:  "high",
+				ProcessNice: cfg.Runtime.ProcessNice,
 			},
 		)
 		close(run.done)
@@ -358,7 +571,13 @@ func (e *Engine) GenerateReport(ctx context.Context) (report.Artifact, error) {
 	e.mu.RLock()
 	manager := e.manager
 	directory := e.lastSession
+	dataDir := e.cfg.DataDir
+	loggingEnabled := e.cfg.Runtime.LoggingEnabled
 	e.mu.RUnlock()
+
+	if manager != nil && !loggingEnabled {
+		return report.Artifact{}, ErrHistoricalLoggingDisabled
+	}
 
 	var (
 		snapshot store.SessionSnapshot
@@ -368,7 +587,7 @@ func (e *Engine) GenerateReport(ctx context.Context) (report.Artifact, error) {
 		snapshot, err = manager.Snapshot()
 	} else {
 		if directory == "" {
-			directory, err = store.LatestSessionDir(e.cfg.DataDir)
+			directory, err = store.LatestSessionDir(dataDir)
 		}
 		if err == nil {
 			snapshot, err = store.SnapshotDir(directory)
@@ -394,6 +613,7 @@ func (e *Engine) LastSessionDir() string {
 	e.mu.RLock()
 	manager := e.manager
 	lastSession := e.lastSession
+	dataDir := e.cfg.DataDir
 	e.mu.RUnlock()
 	if manager != nil {
 		return manager.SessionDir()
@@ -401,7 +621,7 @@ func (e *Engine) LastSessionDir() string {
 	if lastSession != "" {
 		return lastSession
 	}
-	directory, _ := store.LatestSessionDir(e.cfg.DataDir)
+	directory, _ := store.LatestSessionDir(dataDir)
 	return directory
 }
 
@@ -540,6 +760,31 @@ func Serve(ctx context.Context, addr, tokenFile string, engine *Engine, autoMoni
 	mux.HandleFunc("GET /status", auth(func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, engine.Status())
 	}))
+	mux.HandleFunc("GET /settings", auth(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, engine.RuntimeSettings())
+	}))
+	mux.HandleFunc("GET /settings/profiles", auth(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, engine.RuntimeProfiles())
+	}))
+	mux.HandleFunc("PUT /settings", auth(func(w http.ResponseWriter, r *http.Request) {
+		var settings model.RuntimeSettings
+		if err := decodeJSON(w, r, &settings); err != nil {
+			return
+		}
+		if err := config.ValidateRuntimeSettings(settings); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if _, err := engine.ApplyRuntimeSettings(r.Context(), settings); err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, ErrBenchmarkRunning) {
+				status = http.StatusConflict
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+		writeJSON(w, http.StatusOK, engine.RuntimeSettings())
+	}))
 	mux.HandleFunc("GET /benchmarks", auth(func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, benchmark.Catalog())
 	}))
@@ -623,7 +868,10 @@ func Serve(ctx context.Context, addr, tokenFile string, engine *Engine, autoMoni
 		artifact, err := engine.GenerateReport(r.Context())
 		if err != nil {
 			status := http.StatusInternalServerError
-			if errors.Is(err, os.ErrNotExist) {
+			switch {
+			case errors.Is(err, ErrHistoricalLoggingDisabled):
+				status = http.StatusBadRequest
+			case errors.Is(err, os.ErrNotExist):
 				status = http.StatusNotFound
 			}
 			http.Error(w, err.Error(), status)

@@ -37,7 +37,7 @@ private enum SidebarDestination: String, CaseIterable, Identifiable, Hashable {
 }
 
 struct ContentView: View {
-    @StateObject private var model = AppModel()
+    @ObservedObject var model: AppModel
     @State private var selection: SidebarDestination? = .overview
 
     var body: some View {
@@ -81,7 +81,16 @@ struct ContentView: View {
                         Label("Generate Report", systemImage: "doc.text")
                     }
                 }
-                .disabled(model.status?.session == nil || model.isGeneratingReport)
+                .disabled(
+                    model.status?.session == nil
+                        || model.isGeneratingReport
+                        || model.runtimeSettings?.loggingEnabled == false
+                )
+                .help(
+                    model.runtimeSettings?.loggingEnabled == false
+                        ? "Enable durable logging to generate historical reports."
+                        : "Generate a cumulative report for the current session."
+                )
 
                 if model.latestReportURL != nil {
                     Menu {
@@ -175,7 +184,7 @@ struct ContentView: View {
         case .benchmarks:
             BenchmarkView(model: model)
         case .settings:
-            SettingsView(status: model.status)
+            SettingsView(model: model)
         }
     }
 }

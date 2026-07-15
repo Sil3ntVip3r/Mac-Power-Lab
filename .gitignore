@@ -33,6 +33,7 @@ current_phase.txt
 *~
 
 # Language caches
+.build/
 __pycache__/
 *.py[cod]
 .coverage

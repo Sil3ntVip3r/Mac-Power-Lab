@@ -196,20 +196,46 @@ type TestRun struct {
 	Error            string            `json:"error,omitempty"`
 }
 
+// RuntimeSettings is the versioned, effective collection and persistence
+// configuration. Durations use integer milliseconds so the same contract can
+// be consumed without custom duration parsing by Go, Swift, and saved JSON.
+type RuntimeSettings struct {
+	Schema              string `json:"schema"`
+	Profile             string `json:"profile"`
+	UIRefreshMS         int64  `json:"ui_refresh_ms"`
+	BatteryCollectionMS int64  `json:"battery_collection_ms"`
+	PowermetricsMS      int64  `json:"powermetrics_ms"`
+	AppAttributionMS    int64  `json:"app_attribution_ms"`
+	LoggingEnabled      bool   `json:"logging_enabled"`
+	LogIntervalMS       int64  `json:"log_interval_ms"`
+	ProcessNice         int    `json:"process_nice"`
+}
+
+// EffectiveCollectionOptions records non-profile CLI and diagnostic settings
+// that materially affect the meaning or availability of collected data.
+type EffectiveCollectionOptions struct {
+	AppAttribution bool `json:"app_attribution"`
+	TopApps        int  `json:"top_apps"`
+	SQLiteMirror   bool `json:"sqlite_mirror"`
+	SafeMode       bool `json:"safe_mode,omitempty"`
+}
+
 // Session describes one monitor or benchmark collection session.
 type Session struct {
-	Schema        string            `json:"schema"`
-	ID            string            `json:"id"`
-	Version       string            `json:"version"`
-	StartedAt     time.Time         `json:"started_at"`
-	EndedAt       time.Time         `json:"ended_at,omitempty"`
-	Hostname      string            `json:"hostname,omitempty"`
-	OSVersion     string            `json:"os_version,omitempty"`
-	OSBuild       string            `json:"os_build,omitempty"`
-	Machine       string            `json:"machine,omitempty"`
-	Chip          string            `json:"chip,omitempty"`
-	DataDirectory string            `json:"data_directory"`
-	Metadata      map[string]string `json:"metadata,omitempty"`
+	Schema           string                      `json:"schema"`
+	ID               string                      `json:"id"`
+	Version          string                      `json:"version"`
+	StartedAt        time.Time                   `json:"started_at"`
+	EndedAt          time.Time                   `json:"ended_at,omitempty"`
+	Hostname         string                      `json:"hostname,omitempty"`
+	OSVersion        string                      `json:"os_version,omitempty"`
+	OSBuild          string                      `json:"os_build,omitempty"`
+	Machine          string                      `json:"machine,omitempty"`
+	Chip             string                      `json:"chip,omitempty"`
+	DataDirectory    string                      `json:"data_directory"`
+	RuntimeSettings  RuntimeSettings             `json:"runtime_settings"`
+	EffectiveOptions *EffectiveCollectionOptions `json:"effective_options,omitempty"`
+	Metadata         map[string]string           `json:"metadata,omitempty"`
 }
 
 // BenchmarkProgress drives the terminal and SwiftUI progress surfaces.
