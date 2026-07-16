@@ -6,165 +6,14 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  prepare-v150-wait-snapshot:
-    if: github.event_name == 'pull_request' && github.head_ref == 'agent/fix-benchmark-manifest-v1.5.0' && github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: agent/fix-benchmark-manifest-v1.5.0
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Verify focused starting state
-        shell: bash
-        run: |
-          set -euo pipefail
-          git fetch origin main
-          expected=".github/workflows/ci.yml
-CHANGELOG.md
-README.md
-docs/releases/RELEASE_NOTES_v1.5.0.md
-internal/archive/archive.go
-internal/archive/archive_test.go
-internal/benchmark/benchmark.go
-internal/benchmark/benchmark_test.go
-internal/version/version.go
-scripts/bootstrap_macos.sh
-scripts/build_swiftui_app.sh"
-          actual="$(git diff --name-only origin/main...HEAD)"
-          test "$actual" = "$expected"
-      - name: Snapshot run context beside child exit
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          source = Path("internal/benchmark/benchmark.go")
-          text = source.read_text()
-          old = '''\ttype waitResult struct {
-\t\tlabel        string
-\t\terr          error
-\t\tcontextEnded bool
-\t}
-\twaits := make(chan waitResult, len(processes))
-\tfor _, process := range processes {
-\t\tgo func(process *workloadProcess) {
-\t\t\twaitErr := process.cmd.Wait()
-\t\t\twaits <- waitResult{
-\t\t\t\tlabel:        process.label,
-\t\t\t\terr:          waitErr,
-\t\t\t\tcontextEnded: ctx.Err() != nil,
-\t\t\t}
-\t\t}(process)
-\t}
-'''
-          new = '''\ttype waitResult struct {
-\t\tlabel           string
-\t\terr             error
-\t\tcontextEnded    bool
-\t\trunContextEnded bool
-\t}
-\twaits := make(chan waitResult, len(processes))
-\tfor _, process := range processes {
-\t\tgo func(process *workloadProcess) {
-\t\t\twaitErr := process.cmd.Wait()
-\t\t\twaits <- waitResult{
-\t\t\t\tlabel:           process.label,
-\t\t\t\terr:             waitErr,
-\t\t\t\tcontextEnded:    ctx.Err() != nil,
-\t\t\t\trunContextEnded: runCtx.Err() != nil,
-\t\t\t}
-\t\t}(process)
-\t}
-'''
-          if text.count(old) != 1:
-              raise SystemExit("wait result snapshot target was not unique")
-          text = text.replace(old, new)
-
-          old = '''\t\tif waited.err != nil && runCtx.Err() == nil {
-\t\t\tresult = errors.Join(result, fmt.Errorf("workload %s: %w", waited.label, waited.err))
-\t\t\tcancel()
-\t\t}
-'''
-          new = '''\t\tif shouldRecordWorkloadWait(waited.err, waited.runContextEnded) {
-\t\t\tresult = errors.Join(result, fmt.Errorf("workload %s: %w", waited.label, waited.err))
-\t\t\tcancel()
-\t\t}
-'''
-          if text.count(old) != 1:
-              raise SystemExit("wait error classification target was not unique")
-          text = text.replace(old, new)
-
-          marker = '''func finalizeWorkloadResult(ctxErr error, contextEndedBeforeAllExited bool, result error) error {
-'''
-          helper = '''func shouldRecordWorkloadWait(waitErr error, runContextEnded bool) bool {
-\treturn waitErr != nil && !runContextEnded
-}
-
-'''
-          if text.count(marker) != 1:
-              raise SystemExit("wait helper insertion target was not unique")
-          source.write_text(text.replace(marker, helper + marker))
-
-          tests = Path("internal/benchmark/benchmark_test.go")
-          text = tests.read_text()
-          marker = '''func TestRunCommandsPreservesDeadlineForGracefulExit(t *testing.T) {
-'''
-          addition = '''func TestShouldRecordWorkloadWaitUsesExitSnapshot(t *testing.T) {
-\texitErr := errors.New("exit status 7")
-\tif !shouldRecordWorkloadWait(exitErr, false) {
-\t\tt.Fatal("natural child failure was suppressed")
-\t}
-\tif shouldRecordWorkloadWait(exitErr, true) {
-\t\tt.Fatal("cancellation-driven child exit was recorded as a natural failure")
-\t}
-\tif shouldRecordWorkloadWait(nil, false) {
-\t\tt.Fatal("successful child exit was recorded as a failure")
-\t}
-}
-
-'''
-          if text.count(marker) != 1:
-              raise SystemExit("wait snapshot test insertion target was not unique")
-          tests.write_text(text.replace(marker, addition + marker))
-          PY
-          gofmt -w internal/benchmark/benchmark.go internal/benchmark/benchmark_test.go
-          git diff --check
-      - name: Required validation
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -z "$(gofmt -l cmd internal)"
-          go test -count=1 ./...
-          go vet ./...
-          GOMAXPROCS=2 go test -race -count=1 -p 1 ./...
-          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o /tmp/macpowerlab-darwin-arm64 ./cmd/macpowerlab
-          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o /tmp/macpowerlab-darwin-amd64 ./cmd/macpowerlab
-      - name: Commit validated wait snapshot
-        shell: bash
-        run: |
-          set -euo pipefail
-          git show origin/main:.github/workflows/ci.yml > .github/workflows/ci.yml
-          git add internal/benchmark/benchmark.go internal/benchmark/benchmark_test.go .github/workflows/ci.yml
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'fix: snapshot child exit context'
-          git push origin HEAD:agent/fix-benchmark-manifest-v1.5.0
-
   go:
-    if: github.event_name != 'pull_request' || github.head_ref != 'agent/fix-benchmark-manifest-v1.5.0' || github.actor == 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -187,7 +36,6 @@ scripts/build_swiftui_app.sh"
           CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build ./cmd/macpowerlab
 
   swift-syntax:
-    if: github.event_name != 'pull_request' || github.head_ref != 'agent/fix-benchmark-manifest-v1.5.0' || github.actor == 'github-actions[bot]'
     runs-on: macos-latest
     timeout-minutes: 15
     steps:
