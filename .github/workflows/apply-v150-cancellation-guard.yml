@@ -1,0 +1,148 @@
+name: Apply v1.5.0 cancellation guard
+
+on:
+  push:
+    branches:
+      - agent/fix-benchmark-manifest-v1.5.0
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-v150-cancellation-guard
+  cancel-in-progress: false
+
+jobs:
+  apply-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: agent/fix-benchmark-manifest-v1.5.0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify focused starting state
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          expected="CHANGELOG.md
+README.md
+docs/releases/RELEASE_NOTES_v1.5.0.md
+internal/archive/archive.go
+internal/archive/archive_test.go
+internal/benchmark/benchmark.go
+internal/benchmark/benchmark_test.go
+internal/version/version.go
+scripts/bootstrap_macos.sh
+scripts/build_swiftui_app.sh"
+          actual="$(git diff --name-only origin/main...HEAD | grep -v '^.github/workflows/apply-v150-cancellation-guard.yml$')"
+          test "$actual" = "$expected"
+      - name: Preserve caller cancellation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path("internal/benchmark/benchmark.go")
+          text = source.read_text()
+          old = '''\t\tcase <-phaseCtx.Done():
+\t\t\t// Wait for workload cleanup. runCommands owns process Wait calls and
+\t\t\t// receives the same context, so this does not race with subprocess Wait.
+\t\t\t// Its result decides whether the deadline interrupted a child or only
+\t\t\t// raced with cleanup after every child had exited successfully.
+\t\t\tselect {
+\t\t\tcase err := <-done:
+\t\t\t\tdrainPriority()
+\t\t\t\treturn clonePriorityPointer(observed), err
+\t\t\tcase <-time.After(workloadCleanupTimeout):
+'''
+          new = '''\t\tcase <-phaseCtx.Done():
+\t\t\t// Wait for workload cleanup. runCommands owns process Wait calls and
+\t\t\t// receives the same context, so this does not race with subprocess Wait.
+\t\t\t// Its result decides whether the internal phase deadline interrupted a
+\t\t\t// child or only raced with cleanup after every child exited successfully.
+\t\t\t// A caller cancellation or outer deadline always remains authoritative.
+\t\t\tselect {
+\t\t\tcase err := <-done:
+\t\t\t\tdrainPriority()
+\t\t\t\tif parentErr := ctx.Err(); parentErr != nil && !errors.Is(err, parentErr) {
+\t\t\t\t\terr = errors.Join(parentErr, err)
+\t\t\t\t}
+\t\t\t\treturn clonePriorityPointer(observed), err
+\t\t\tcase <-time.After(workloadCleanupTimeout):
+'''
+          if text.count(old) != 1:
+              raise SystemExit("benchmark runPhase target was not unique")
+          source.write_text(text.replace(old, new))
+
+          tests = Path("internal/benchmark/benchmark_test.go")
+          text = tests.read_text()
+          marker = '''func TestFinalizeWorkloadResultPrefersSuccessfulExit(t *testing.T) {
+'''
+          addition = '''func TestRunPhasePreservesCallerCancellationAfterSuccessfulExit(t *testing.T) {
+\tmonitor := &fakeMonitor{
+\t\tsample:  &model.PowerSample{Battery: model.BatterySample{PowerSource: "Battery Power"}},
+\t\tsession: model.Session{ID: "session"},
+\t\tdir:     t.TempDir(),
+\t}
+\tstarted := make(chan struct{})
+\tdeps := testControllerDependencies(func(ctx context.Context, _ string, _ Phase, _ Options) error {
+\t\tclose(started)
+\t\t<-ctx.Done()
+\t\treturn nil
+\t})
+\tcontroller := newController(monitor, deps)
+\tphase := Phase{Name: "phase", Kind: "cpu", Duration: time.Minute}
+\tctx, cancel := context.WithCancel(context.Background())
+\tdone := make(chan error, 1)
+\tgo func() {
+\t\t_, err := controller.runPhase(
+\t\t\tctx,
+\t\t\tPlan{Name: "test", Phases: []Phase{phase}},
+\t\t\t0,
+\t\t\tphase,
+\t\t\tOptions{},
+\t\t)
+\t\tdone <- err
+\t}()
+\t<-started
+\tcancel()
+\tif err := <-done; !errors.Is(err, context.Canceled) {
+\t\tt.Fatalf("caller cancellation was lost after successful exit: %v", err)
+\t}
+}
+
+'''
+          if text.count(marker) != 1:
+              raise SystemExit("benchmark test insertion target was not unique")
+          tests.write_text(text.replace(marker, addition + marker))
+          PY
+          gofmt -w internal/benchmark/benchmark.go internal/benchmark/benchmark_test.go
+          git diff --check
+      - name: Required validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(gofmt -l cmd internal)"
+          go test -count=1 ./...
+          go vet ./...
+          GOMAXPROCS=2 go test -race -count=1 -p 1 ./...
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o /tmp/macpowerlab-darwin-arm64 ./cmd/macpowerlab
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o /tmp/macpowerlab-darwin-amd64 ./cmd/macpowerlab
+      - name: Commit validated cancellation guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/apply-v150-cancellation-guard.yml
+          git add internal/benchmark/benchmark.go internal/benchmark/benchmark_test.go .github/workflows/apply-v150-cancellation-guard.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: preserve explicit benchmark cancellation'
+          git push origin HEAD:agent/fix-benchmark-manifest-v1.5.0
