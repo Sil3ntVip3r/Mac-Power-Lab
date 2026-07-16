@@ -44,7 +44,7 @@ scripts/bootstrap_macos.sh
 scripts/build_swiftui_app.sh"
           actual="$(git diff --name-only origin/main...HEAD)"
           test "$actual" = "$expected"
-      - name: Snapshot child wait context
+      - name: Snapshot run context beside child exit
         shell: bash
         run: |
           set -euo pipefail
@@ -54,131 +54,90 @@ scripts/build_swiftui_app.sh"
           source = Path("internal/benchmark/benchmark.go")
           text = source.read_text()
           old = '''\ttype waitResult struct {
-\t\tlabel string
-\t\terr   error
-\t}
-\twaits := make(chan waitResult, len(processes))
-\tfor _, process := range processes {
-\t\tgo func(process *workloadProcess) {
-\t\t\twaits <- waitResult{label: process.label, err: process.cmd.Wait()}
-\t\t}(process)
-\t}
-
-\tvar result error
-\trecordWait := func(waited waitResult) {
-\t\tif waited.err != nil && runCtx.Err() == nil {
-\t\t\tresult = errors.Join(result, fmt.Errorf("workload %s: %w", waited.label, waited.err))
-\t\t\tcancel()
-\t\t}
-\t}
-\tremaining := len(processes)
-\tcontextDone := ctx.Done()
-\tcontextEndedBeforeAllExited := ctx.Err() != nil
-\tif contextEndedBeforeAllExited {
-\t\tcontextDone = nil
-\t}
-\tfor remaining > 0 {
-\t\tselect {
-\t\tcase waited := <-waits:
-\t\t\tremaining--
-\t\t\trecordWait(waited)
-\t\tcase <-contextDone:
-\t\t\t// Prefer an exit result already buffered at the deadline. If none is
-\t\t\t// available, the context ended while at least one child was active.
-\t\t\tselect {
-\t\t\tcase waited := <-waits:
-\t\t\t\tremaining--
-\t\t\t\trecordWait(waited)
-\t\t\tdefault:
-\t\t\t\tcontextEndedBeforeAllExited = true
-\t\t\t\tcontextDone = nil
-\t\t\t}
-\t\t}
-\t}
-'''
-          new = '''\ttype waitResult struct {
-\t\tlabel      string
-\t\terr        error
-\t\tcontextErr error
+\t\tlabel        string
+\t\terr          error
+\t\tcontextEnded bool
 \t}
 \twaits := make(chan waitResult, len(processes))
 \tfor _, process := range processes {
 \t\tgo func(process *workloadProcess) {
 \t\t\twaitErr := process.cmd.Wait()
 \t\t\twaits <- waitResult{
-\t\t\t\tlabel:      process.label,
-\t\t\t\terr:        waitErr,
-\t\t\t\tcontextErr: runCtx.Err(),
+\t\t\t\tlabel:        process.label,
+\t\t\t\terr:          waitErr,
+\t\t\t\tcontextEnded: ctx.Err() != nil,
 \t\t\t}
 \t\t}(process)
 \t}
-
-\tvar result error
-\tcontextEndedBeforeAllExited := false
-\tfor range processes {
-\t\twaited := <-waits
-\t\twaitErr, contextEnded := classifyWorkloadWait(
-\t\t\twaited.label,
-\t\t\twaited.err,
-\t\t\twaited.contextErr,
-\t\t)
-\t\tcontextEndedBeforeAllExited = contextEndedBeforeAllExited || contextEnded
-\t\tif waitErr != nil {
-\t\t\tresult = errors.Join(result, waitErr)
-\t\t\tcancel()
-\t\t}
+'''
+          new = '''\ttype waitResult struct {
+\t\tlabel           string
+\t\terr             error
+\t\tcontextEnded    bool
+\t\trunContextEnded bool
+\t}
+\twaits := make(chan waitResult, len(processes))
+\tfor _, process := range processes {
+\t\tgo func(process *workloadProcess) {
+\t\t\twaitErr := process.cmd.Wait()
+\t\t\twaits <- waitResult{
+\t\t\t\tlabel:           process.label,
+\t\t\t\terr:             waitErr,
+\t\t\t\tcontextEnded:    ctx.Err() != nil,
+\t\t\t\trunContextEnded: runCtx.Err() != nil,
+\t\t\t}
+\t\t}(process)
 \t}
 '''
           if text.count(old) != 1:
-              raise SystemExit("workload wait loop target was not unique")
+              raise SystemExit("wait result snapshot target was not unique")
           text = text.replace(old, new)
 
-          marker = '''func capturePriorityObservation(
+          old = '''\t\tif waited.err != nil && runCtx.Err() == nil {
+\t\t\tresult = errors.Join(result, fmt.Errorf("workload %s: %w", waited.label, waited.err))
+\t\t\tcancel()
+\t\t}
 '''
-          helper = '''func classifyWorkloadWait(label string, waitErr, contextErr error) (error, bool) {
-\tif contextErr != nil {
-\t\treturn nil, true
-\t}
-\tif waitErr == nil {
-\t\treturn nil, false
-\t}
-\treturn fmt.Errorf("workload %s: %w", label, waitErr), false
+          new = '''\t\tif shouldRecordWorkloadWait(waited.err, waited.runContextEnded) {
+\t\t\tresult = errors.Join(result, fmt.Errorf("workload %s: %w", waited.label, waited.err))
+\t\t\tcancel()
+\t\t}
+'''
+          if text.count(old) != 1:
+              raise SystemExit("wait error classification target was not unique")
+          text = text.replace(old, new)
+
+          marker = '''func finalizeWorkloadResult(ctxErr error, contextEndedBeforeAllExited bool, result error) error {
+'''
+          helper = '''func shouldRecordWorkloadWait(waitErr error, runContextEnded bool) bool {
+\treturn waitErr != nil && !runContextEnded
 }
 
 '''
           if text.count(marker) != 1:
-              raise SystemExit("workload wait helper insertion target was not unique")
+              raise SystemExit("wait helper insertion target was not unique")
           source.write_text(text.replace(marker, helper + marker))
 
           tests = Path("internal/benchmark/benchmark_test.go")
           text = tests.read_text()
-          marker = '''func TestFinalizeWorkloadResultDistinguishesDeadlineOrder(t *testing.T) {
+          marker = '''func TestRunCommandsPreservesDeadlineForGracefulExit(t *testing.T) {
 '''
-          addition = '''func TestClassifyWorkloadWaitSnapshotsContextAtExit(t *testing.T) {
+          addition = '''func TestShouldRecordWorkloadWaitUsesExitSnapshot(t *testing.T) {
 \texitErr := errors.New("exit status 7")
-\tgot, contextEnded := classifyWorkloadWait("cpu_stress[1]", exitErr, nil)
-\tif contextEnded || !errors.Is(got, exitErr) {
-\t\tt.Fatalf("natural failure classification: err=%v contextEnded=%t", got, contextEnded)
+\tif !shouldRecordWorkloadWait(exitErr, false) {
+\t\tt.Fatal("natural child failure was suppressed")
 \t}
-
-\tgot, contextEnded = classifyWorkloadWait(
-\t\t"cpu_stress[1]",
-\t\terrors.New("signal: terminated"),
-\t\tcontext.DeadlineExceeded,
-\t)
-\tif !contextEnded || got != nil {
-\t\tt.Fatalf("deadline-driven exit classification: err=%v contextEnded=%t", got, contextEnded)
+\tif shouldRecordWorkloadWait(exitErr, true) {
+\t\tt.Fatal("cancellation-driven child exit was recorded as a natural failure")
 \t}
-
-\tgot, contextEnded = classifyWorkloadWait("cpu_stress[1]", nil, nil)
-\tif contextEnded || got != nil {
-\t\tt.Fatalf("successful exit classification: err=%v contextEnded=%t", got, contextEnded)
+\tif shouldRecordWorkloadWait(nil, false) {
+\t\tt.Fatal("successful child exit was recorded as a failure")
 \t}
 }
 
 '''
           if text.count(marker) != 1:
-              raise SystemExit("workload wait classifier test insertion target was not unique")
+              raise SystemExit("wait snapshot test insertion target was not unique")
           tests.write_text(text.replace(marker, addition + marker))
           PY
           gofmt -w internal/benchmark/benchmark.go internal/benchmark/benchmark_test.go
@@ -201,7 +160,7 @@ scripts/build_swiftui_app.sh"
           git add internal/benchmark/benchmark.go internal/benchmark/benchmark_test.go .github/workflows/ci.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'fix: retain child exit ordering at timeout'
+          git commit -m 'fix: snapshot child exit context'
           git push origin HEAD:agent/fix-benchmark-manifest-v1.5.0
 
   go:
