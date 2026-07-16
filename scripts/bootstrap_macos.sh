@@ -3,7 +3,7 @@ set -euo pipefail
 source "${0:A:h}/lib.sh"
 [[ "$(uname -s)" == "Darwin" ]] || { echo "Requires macOS." >&2; exit 1; }
 
-echo "MacPowerLab v1.4.0 local bootstrap"
+echo "MacPowerLab v1.5.0 local bootstrap"
 echo "================================="
 echo "This removes quarantine only from this project, signs local outputs,"
 echo "validates the CLI, builds native workloads, and creates the app."

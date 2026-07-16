@@ -409,3 +409,64 @@ func TestControllerDoesNotTransitionPhaseWhenBoundaryFlushFails(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+func TestPhaseCompletionGraceScalesAndStaysBounded(t *testing.T) {
+	tests := []struct {
+		name     string
+		duration time.Duration
+		want     time.Duration
+	}{
+		{name: "short", duration: time.Second, want: 30 * time.Second},
+		{name: "extreme soak", duration: 10 * time.Minute, want: time.Minute},
+		{name: "bounded", duration: 24 * time.Hour, want: 2 * time.Minute},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := phaseCompletionGrace(test.duration); got != test.want {
+				t.Fatalf("phaseCompletionGrace(%s)=%s want=%s", test.duration, got, test.want)
+			}
+		})
+	}
+}
+
+func TestRunPhaseAcceptsSuccessfulExitAfterDeadline(t *testing.T) {
+	monitor := &fakeMonitor{
+		sample:  &model.PowerSample{Battery: model.BatterySample{PowerSource: "Battery Power"}},
+		session: model.Session{ID: "session"},
+		dir:     t.TempDir(),
+	}
+	deps := testControllerDependencies(func(ctx context.Context, _ string, _ Phase, _ Options) error {
+		<-ctx.Done()
+		time.Sleep(20 * time.Millisecond)
+		return nil
+	})
+	deps.phaseGrace = func(time.Duration) time.Duration { return 5 * time.Millisecond }
+	controller := newController(monitor, deps)
+	phase := Phase{Name: "phase", Kind: "cpu", Duration: 5 * time.Millisecond}
+
+	if _, err := controller.runPhase(
+		context.Background(),
+		Plan{Name: "test", Phases: []Phase{phase}},
+		0,
+		phase,
+		Options{},
+	); err != nil {
+		t.Fatalf("successful workload exit was reported as stopped: %v", err)
+	}
+}
+
+func TestFinalizeWorkloadResultPrefersSuccessfulExit(t *testing.T) {
+	if err := finalizeWorkloadResult(context.DeadlineExceeded, true, nil); err != nil {
+		t.Fatalf("successful exit inherited deadline: %v", err)
+	}
+
+	syncErr := errors.New("sync failed")
+	if err := finalizeWorkloadResult(context.DeadlineExceeded, true, syncErr); !errors.Is(err, syncErr) || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("successful process with output failure returned %v", err)
+	}
+
+	exitErr := errors.New("exit status 1")
+	if err := finalizeWorkloadResult(context.DeadlineExceeded, false, exitErr); !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, exitErr) {
+		t.Fatalf("failed process lost deadline or exit error: %v", err)
+	}
+}

@@ -130,6 +130,7 @@ See:
 - [Validation](VALIDATION.md)
 - [Migration history](MIGRATION_PHASES.md)
 - [v1.4.0 engineering review](docs/engineering/v1.4.0.md)
+- [v1.5.0 release notes](docs/releases/RELEASE_NOTES_v1.5.0.md)
 - [Release notes](docs/releases/)
 
 ## Accuracy and interpretation
@@ -186,4 +187,4 @@ Create a support archive without local API credentials or private-key material:
 ./bin/macpowerlab support pack
 ```
 
-The default bundle is written to `~/Downloads`. The archive manifest lists excluded paths and reasons, but excluded file contents are never opened or packaged.
+The default bundle is written to `~/Downloads`. The archive manifest records the actual bundle creation time and lists excluded paths and reasons, but excluded file contents are never opened or packaged. TAR member and gzip header timestamps remain normalized for stable packaging.

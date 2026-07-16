@@ -4,6 +4,8 @@ All notable changes to Mac Power Lab are documented here. Detailed historical no
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-07-16
+
 ### Added
 - Added observed cadence diagnostics for SwiftUI polling, backend live publication, battery, `powermetrics`, app attribution, and durable logging.
 - Added live benchmark priority observations that record the backend and each running workload process while the phase is active.
@@ -13,6 +15,8 @@ All notable changes to Mac Power Lab are documented here. Detailed historical no
 - Added complete effective collection options to new session metadata and durable product, UX, privacy, and roadmap documentation.
 
 ### Fixed
+- Scaled the bounded benchmark phase-completion grace for long soaks and treated successful workload exits as authoritative when a deadline races with final cleanup.
+- Recorded the actual support-bundle creation time in `MANIFEST_macpowerlab.json` while retaining normalized TAR member and gzip header timestamps.
 - Removed the duplicate store-level cadence calculation so the collector manager is the single owner of durable log deadlines.
 - Prevented support bundles from including local API tokens, token-address files, launcher scripts, SQLite sidecars, Finder metadata, or private-key material.
 - Made settings restarts transactional so persistence or shutdown failure cannot launch overlapping collectors.

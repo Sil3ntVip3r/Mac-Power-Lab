@@ -65,7 +65,26 @@ type controllerDependencies struct {
 	acquireLock    func(string) (func(), error)
 	runWorkload    func(context.Context, string, Phase, Options, priorityReporter) error
 	startSleepLock func(context.Context) (func(), error)
+	phaseGrace     func(time.Duration) time.Duration
 	now            func() time.Time
+}
+
+const (
+	minimumPhaseCompletionGrace = 30 * time.Second
+	maximumPhaseCompletionGrace = 2 * time.Minute
+	workloadCleanupTimeout      = 10 * time.Second
+)
+
+func phaseCompletionGrace(duration time.Duration) time.Duration {
+	grace := duration / 10
+	switch {
+	case grace < minimumPhaseCompletionGrace:
+		return minimumPhaseCompletionGrace
+	case grace > maximumPhaseCompletionGrace:
+		return maximumPhaseCompletionGrace
+	default:
+		return grace
+	}
 }
 
 func defaultControllerDependencies() controllerDependencies {
@@ -73,6 +92,7 @@ func defaultControllerDependencies() controllerDependencies {
 		buildNative: BuildNative,
 		acquireLock: acquireLock,
 		runWorkload: runWorkload,
+		phaseGrace:  phaseCompletionGrace,
 		startSleepLock: func(ctx context.Context) (func(), error) {
 			cmd, err := startCaffeinate(ctx)
 			if err != nil {
@@ -99,6 +119,9 @@ func New(manager Monitor) *Controller {
 }
 
 func newController(manager Monitor, deps controllerDependencies) *Controller {
+	if deps.phaseGrace == nil {
+		deps.phaseGrace = phaseCompletionGrace
+	}
 	return &Controller{
 		manager: manager,
 		deps:    deps,
@@ -347,7 +370,7 @@ func (c *Controller) runPhase(
 	phase Phase,
 	opts Options,
 ) (*model.BenchmarkPriorityObservation, error) {
-	phaseCtx, cancel := context.WithTimeout(ctx, phase.Duration+30*time.Second)
+	phaseCtx, cancel := context.WithTimeout(ctx, phase.Duration+c.deps.phaseGrace(phase.Duration))
 	defer cancel()
 	started := c.deps.now()
 	baseProgress := model.BenchmarkProgress{
@@ -424,14 +447,13 @@ func (c *Controller) runPhase(
 		case <-phaseCtx.Done():
 			// Wait for workload cleanup. runCommands owns process Wait calls and
 			// receives the same context, so this does not race with subprocess Wait.
+			// Its result decides whether the deadline interrupted a child or only
+			// raced with cleanup after every child had exited successfully.
 			select {
 			case err := <-done:
 				drainPriority()
-				if phaseCtx.Err() != nil {
-					return clonePriorityPointer(observed), errors.Join(phaseCtx.Err(), err)
-				}
 				return clonePriorityPointer(observed), err
-			case <-time.After(10 * time.Second):
+			case <-time.After(workloadCleanupTimeout):
 				return clonePriorityPointer(observed), fmt.Errorf(
 					"workload cleanup timed out: %w",
 					phaseCtx.Err(),
@@ -729,9 +751,14 @@ func runCommands(
 	}
 
 	var result error
+	allExitedSuccessfully := true
 	for range processes {
 		waited := <-waits
-		if waited.err != nil && runCtx.Err() == nil {
+		if waited.err == nil {
+			continue
+		}
+		allExitedSuccessfully = false
+		if runCtx.Err() == nil {
 			result = errors.Join(result, fmt.Errorf("workload %s: %w", waited.label, waited.err))
 			cancel()
 		}
@@ -751,10 +778,14 @@ func runCommands(
 			result = errors.Join(result, fmt.Errorf("close %s log: %w", process.label, closeErr))
 		}
 	}
-	if ctx.Err() != nil {
-		return errors.Join(ctx.Err(), result)
+	return finalizeWorkloadResult(ctx.Err(), allExitedSuccessfully, result)
+}
+
+func finalizeWorkloadResult(ctxErr error, allExitedSuccessfully bool, result error) error {
+	if allExitedSuccessfully {
+		return result
 	}
-	return result
+	return errors.Join(ctxErr, result)
 }
 
 func capturePriorityObservation(

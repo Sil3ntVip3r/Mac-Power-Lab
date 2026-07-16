@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCreate(t *testing.T) {
@@ -104,16 +105,75 @@ func TestCreateIsReproducible(t *testing.T) {
 	}
 	first := filepath.Join(t.TempDir(), "first.tar.gz")
 	second := filepath.Join(t.TempDir(), "second.tar.gz")
-	if err := Create(root, first); err != nil {
+	createdAt := time.Date(2026, time.July, 16, 22, 0, 0, 0, time.UTC)
+	if err := create(root, first, createdAt); err != nil {
 		t.Fatal(err)
 	}
-	if err := Create(root, second); err != nil {
+	if err := create(root, second, createdAt); err != nil {
 		t.Fatal(err)
 	}
 	left, _ := os.ReadFile(first)
 	right, _ := os.ReadFile(second)
 	if !bytes.Equal(left, right) {
 		t.Fatal("archives differ for identical input")
+	}
+}
+
+func TestCreateRecordsActualManifestCreationTime(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "session")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "out.tar.gz")
+	before := time.Now().UTC()
+	if err := Create(root, out); err != nil {
+		t.Fatal(err)
+	}
+	after := time.Now().UTC()
+
+	file, err := os.Open(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	gzipReader, err := gzip.NewReader(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gzipReader.Close()
+	tarReader := tar.NewReader(gzipReader)
+	var manifest Manifest
+	foundManifest := false
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !header.ModTime.Equal(reproducibleTime) {
+			t.Fatalf("archive header %q time=%s want=%s", header.Name, header.ModTime, reproducibleTime)
+		}
+		if header.Name != "MANIFEST_macpowerlab.json" {
+			continue
+		}
+		foundManifest = true
+		if err := json.NewDecoder(tarReader).Decode(&manifest); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !foundManifest {
+		t.Fatal("archive manifest is missing")
+	}
+	if manifest.CreatedAt.IsZero() {
+		t.Fatal("manifest creation time is zero")
+	}
+	if manifest.CreatedAt.Before(before) || manifest.CreatedAt.After(after) {
+		t.Fatalf("manifest created_at=%s outside [%s, %s]", manifest.CreatedAt, before, after)
 	}
 }
 
