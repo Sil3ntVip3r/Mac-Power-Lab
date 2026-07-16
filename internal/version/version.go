@@ -2,8 +2,8 @@
 package version
 
 const (
-	Version               = "1.4.0"
-	Commit                = "cadence-priority-support"
+	Version               = "1.5.0"
+	Commit                = "benchmark-completion-manifest"
 	PowerSampleSchema     = "macpowerlab.power_sample.v1"
 	AppPowerSchema        = "macpowerlab.app_power.v1"
 	EventSchema           = "macpowerlab.event.v1"

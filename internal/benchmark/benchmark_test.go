@@ -3,6 +3,8 @@ package benchmark
 import (
 	"context"
 	"errors"
+	"os"
+	"os/signal"
 	"strings"
 	"sync"
 	"testing"
@@ -407,5 +409,132 @@ func TestControllerDoesNotTransitionPhaseWhenBoundaryFlushFails(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(err.Error(), "flush samples before") {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestPhaseCompletionGraceScalesAndStaysBounded(t *testing.T) {
+	tests := []struct {
+		name     string
+		duration time.Duration
+		want     time.Duration
+	}{
+		{name: "short", duration: time.Second, want: 30 * time.Second},
+		{name: "extreme soak", duration: 10 * time.Minute, want: time.Minute},
+		{name: "bounded", duration: 24 * time.Hour, want: 2 * time.Minute},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := phaseCompletionGrace(test.duration); got != test.want {
+				t.Fatalf("phaseCompletionGrace(%s)=%s want=%s", test.duration, got, test.want)
+			}
+		})
+	}
+}
+
+func TestRunPhaseAcceptsSuccessfulExitAfterDeadline(t *testing.T) {
+	monitor := &fakeMonitor{
+		sample:  &model.PowerSample{Battery: model.BatterySample{PowerSource: "Battery Power"}},
+		session: model.Session{ID: "session"},
+		dir:     t.TempDir(),
+	}
+	deps := testControllerDependencies(func(ctx context.Context, _ string, _ Phase, _ Options) error {
+		<-ctx.Done()
+		time.Sleep(20 * time.Millisecond)
+		return nil
+	})
+	deps.phaseGrace = func(time.Duration) time.Duration { return 5 * time.Millisecond }
+	controller := newController(monitor, deps)
+	phase := Phase{Name: "phase", Kind: "cpu", Duration: 5 * time.Millisecond}
+
+	if _, err := controller.runPhase(
+		context.Background(),
+		Plan{Name: "test", Phases: []Phase{phase}},
+		0,
+		phase,
+		Options{},
+	); err != nil {
+		t.Fatalf("successful workload exit was reported as stopped: %v", err)
+	}
+}
+
+func TestRunPhasePreservesParentCancellationAfterSuccessfulCleanup(t *testing.T) {
+	monitor := &fakeMonitor{
+		sample:  &model.PowerSample{Battery: model.BatterySample{PowerSource: "Battery Power"}},
+		session: model.Session{ID: "session"},
+		dir:     t.TempDir(),
+	}
+	started := make(chan struct{})
+	deps := testControllerDependencies(func(ctx context.Context, _ string, _ Phase, _ Options) error {
+		close(started)
+		<-ctx.Done()
+		return nil
+	})
+	controller := newController(monitor, deps)
+	phase := Phase{Name: "phase", Kind: "cpu", Duration: time.Minute}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := controller.runPhase(
+			ctx,
+			Plan{Name: "test", Phases: []Phase{phase}},
+			0,
+			phase,
+			Options{},
+		)
+		done <- err
+	}()
+	<-started
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("parent cancellation was lost: %v", err)
+	}
+}
+
+func TestRunCommandsPreservesDeadlineForGracefulExit(t *testing.T) {
+	const helperEnvironment = "MACPOWERLAB_GRACEFUL_WORKLOAD_HELPER"
+	if os.Getenv(helperEnvironment) == "1" {
+		signals := make(chan os.Signal, 1)
+		signal.Notify(signals)
+		<-signals
+		os.Exit(0)
+	}
+
+	t.Setenv(helperEnvironment, "1")
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	err := runCommands(
+		ctx,
+		t.TempDir(),
+		"run",
+		"phase",
+		[][]string{{os.Args[0], "-test.run=^TestRunCommandsPreservesDeadlineForGracefulExit$"}},
+		0,
+		nil,
+	)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("deadline-driven graceful exit was accepted: %v", err)
+	}
+}
+
+func TestFinalizeWorkloadResultDistinguishesDeadlineOrder(t *testing.T) {
+	if err := finalizeWorkloadResult(context.DeadlineExceeded, false, nil); err != nil {
+		t.Fatalf("successful exit before deadline inherited cleanup deadline: %v", err)
+	}
+
+	syncErr := errors.New("sync failed")
+	if err := finalizeWorkloadResult(context.DeadlineExceeded, false, syncErr); !errors.Is(err, syncErr) || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("post-exit output failure returned %v", err)
+	}
+
+	if err := finalizeWorkloadResult(context.DeadlineExceeded, true, nil); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("deadline-driven graceful exit was accepted: %v", err)
+	}
+
+	exitErr := errors.New("exit status 1")
+	if err := finalizeWorkloadResult(nil, false, exitErr); !errors.Is(err, exitErr) {
+		t.Fatalf("child failure was lost: %v", err)
+	}
+	if err := finalizeWorkloadResult(context.DeadlineExceeded, true, exitErr); !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, exitErr) {
+		t.Fatalf("deadline or child failure was lost: %v", err)
 	}
 }
