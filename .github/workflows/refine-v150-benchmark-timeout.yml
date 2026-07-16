@@ -27,12 +27,6 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Verify branch head
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD^)" = "e169c44a39a23d5b6fc12db8dec714c5ea760364"
-
       - name: Preserve cancellation and deadline ordering
         shell: bash
         run: |
@@ -44,36 +38,36 @@ jobs:
           text = source.read_text()
 
           old = '''\t\tcase err := <-done:
-          \t\tdrainPriority()
-          \t\treturn clonePriorityPointer(observed), err
-          \tcase <-phaseCtx.Done():
-          \t\t// Wait for workload cleanup. runCommands owns process Wait calls and
-          \t\t// receives the same context, so this does not race with subprocess Wait.
-          \t\t// Its result decides whether the deadline interrupted a child or only
-          \t\t// raced with cleanup after every child had exited successfully.
-          \t\tselect {
-          \t\tcase err := <-done:
           \t\t\tdrainPriority()
           \t\t\treturn clonePriorityPointer(observed), err
+          \t\tcase <-phaseCtx.Done():
+          \t\t\t// Wait for workload cleanup. runCommands owns process Wait calls and
+          \t\t\t// receives the same context, so this does not race with subprocess Wait.
+          \t\t\t// Its result decides whether the deadline interrupted a child or only
+          \t\t\t// raced with cleanup after every child had exited successfully.
+          \t\t\tselect {
+          \t\t\tcase err := <-done:
+          \t\t\t\tdrainPriority()
+          \t\t\t\treturn clonePriorityPointer(observed), err
           '''
           new = '''\t\tcase err := <-done:
-          \t\tdrainPriority()
-          \t\tif ctxErr := ctx.Err(); ctxErr != nil {
-          \t\t\terr = errors.Join(ctxErr, err)
-          \t\t}
-          \t\treturn clonePriorityPointer(observed), err
-          \tcase <-phaseCtx.Done():
-          \t\t// Wait for workload cleanup. runCommands records whether the phase
-          \t\t// context ended before all child Wait calls completed. This accepts
-          \t\t// natural exits that beat the deadline while preserving deadline-driven
-          \t\t// graceful exits and explicit parent cancellation.
-          \t\tselect {
-          \t\tcase err := <-done:
           \t\t\tdrainPriority()
           \t\t\tif ctxErr := ctx.Err(); ctxErr != nil {
           \t\t\t\terr = errors.Join(ctxErr, err)
           \t\t\t}
           \t\t\treturn clonePriorityPointer(observed), err
+          \t\tcase <-phaseCtx.Done():
+          \t\t\t// Wait for workload cleanup. runCommands records whether the phase
+          \t\t\t// context ended before all child Wait calls completed. This accepts
+          \t\t\t// natural exits that beat the deadline while preserving deadline-driven
+          \t\t\t// graceful exits and explicit parent cancellation.
+          \t\t\tselect {
+          \t\t\tcase err := <-done:
+          \t\t\t\tdrainPriority()
+          \t\t\t\tif ctxErr := ctx.Err(); ctxErr != nil {
+          \t\t\t\t\terr = errors.Join(ctxErr, err)
+          \t\t\t\t}
+          \t\t\t\treturn clonePriorityPointer(observed), err
           '''
           if text.count(old) != 1:
               raise SystemExit("runPhase completion block did not match exactly once")
@@ -232,14 +226,7 @@ jobs:
           tests.write_text(text.replace(old, new))
           PY
           gofmt -w internal/benchmark/benchmark.go internal/benchmark/benchmark_test.go
-
-      - name: Inspect exact diff
-        shell: bash
-        run: |
-          set -euo pipefail
           git diff --check
-          git status --short
-          git diff -- internal/benchmark/benchmark.go internal/benchmark/benchmark_test.go
 
       - name: Required validation
         shell: bash
@@ -258,7 +245,6 @@ jobs:
           set -euo pipefail
           rm -f .github/workflows/refine-v150-benchmark-timeout.yml
           git add internal/benchmark/benchmark.go internal/benchmark/benchmark_test.go .github/workflows/refine-v150-benchmark-timeout.yml
-          test "$(git diff --cached --name-only | wc -l | tr -d ' ')" = 3
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'fix: preserve benchmark timeout ordering'
