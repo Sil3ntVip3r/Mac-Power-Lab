@@ -1,9 +1,11 @@
 package report
 
 import (
+	"encoding/json"
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,6 +72,18 @@ func TestGenerateUsesTimeWeightedAverageAndDeduplicatesRuns(t *testing.T) {
 	final.Status = "complete"
 	final.EndedAt = started.Add(time.Minute)
 	final.ActualSeconds = 60
+	final.Priority = &model.BenchmarkPriorityObservation{
+		CapturedAt:            started.Add(time.Second),
+		Supported:             true,
+		RequestedBackendNice:  -5,
+		ObservedBackendNice:   -5,
+		RequestedWorkloadNice: 0,
+		Workloads: []model.ProcessPriorityObservation{{
+			PID:   123,
+			Label: "cpu_stress[1]",
+			Nice:  0,
+		}},
+	}
 	if err := st.WriteTestRun(running); err != nil {
 		t.Fatal(err)
 	}
@@ -91,6 +105,36 @@ func TestGenerateUsesTimeWeightedAverageAndDeduplicatesRuns(t *testing.T) {
 	}
 	if len(summary.TestRuns) != 1 || summary.TestRuns[0].Status != "complete" {
 		t.Fatalf("test runs=%+v", summary.TestRuns)
+	}
+	markdown, err := os.ReadFile(artifact.MarkdownPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(markdown), "|-5|") &&
+		!strings.Contains(string(markdown), "| -5 |") {
+		t.Fatalf("benchmark priority missing from report: %s", markdown)
+	}
+	if !strings.Contains(string(markdown), "cpu_stress[1]=0") {
+		t.Fatalf("workload priority missing from report: %s", markdown)
+	}
+}
+
+func TestBenchmarkWorkloadNiceExplainsMissingObservation(t *testing.T) {
+	idle := model.TestRun{Priority: &model.BenchmarkPriorityObservation{
+		Supported:             true,
+		RequestedWorkloadNice: 0,
+	}}
+	if got := benchmarkWorkloadNice(idle); got != "none" {
+		t.Fatalf("idle workload nice=%q want none", got)
+	}
+
+	failed := idle
+	failed.Priority = &model.BenchmarkPriorityObservation{
+		Supported: true,
+		Errors:    []string{"read workload nice: process exited"},
+	}
+	if got := benchmarkWorkloadNice(failed); got != "capture failed" {
+		t.Fatalf("failed workload nice=%q want capture failed", got)
 	}
 }
 
@@ -276,12 +320,30 @@ func TestGenerateRejectsOutOfOrderSamples(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, timestamp := range []time.Time{start.Add(time.Second), start} {
-		if err := st.WriteSample(model.PowerSample{Timestamp: timestamp, SessionID: session.ID}); err != nil {
-			t.Fatal(err)
-		}
+	if err := st.WriteSample(model.PowerSample{
+		Schema:    version.PowerSampleSchema,
+		Timestamp: start.Add(time.Second),
+		SessionID: session.ID,
+	}); err != nil {
+		t.Fatal(err)
 	}
 	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	samplesPath := filepath.Join(base, "sessions", session.ID, "samples.jsonl")
+	file, err := os.OpenFile(samplesPath, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.NewEncoder(file).Encode(model.PowerSample{
+		Schema:    version.PowerSampleSchema,
+		Timestamp: start,
+		SessionID: session.ID,
+	}); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Generate(filepath.Join(base, "sessions", session.ID)); err == nil {

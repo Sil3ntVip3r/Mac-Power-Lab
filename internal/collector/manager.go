@@ -48,6 +48,7 @@ type Manager struct {
 	tempHistory       []tempPoint
 	previousSource    string
 	previousState     string
+	cadence           *cadenceState
 }
 
 type tempPoint struct {
@@ -85,6 +86,7 @@ func NewManager(cfg config.Config) (*Manager, error) {
 		done:          make(chan struct{}),
 		samples:       make(chan model.PowerSample, 1),
 		errs:          make(chan error, 32),
+		cadence:       newCadenceState(cfg.Runtime),
 	}, nil
 }
 
@@ -125,7 +127,6 @@ func (m *Manager) Start(parent context.Context, metadata map[string]string) erro
 		store.SessionOptions{
 			SQLite:        m.cfg.SQLite,
 			SampleLogging: m.cfg.Runtime.LoggingEnabled,
-			LogInterval:   time.Duration(m.cfg.Runtime.LogIntervalMS) * time.Millisecond,
 		},
 	)
 	if err != nil {
@@ -222,6 +223,7 @@ func (m *Manager) run(ctx context.Context) {
 			m.latestProcessesAt = time.Now()
 			m.processStatus = "ok"
 			m.mu.Unlock()
+			m.cadence.observeApps(time.Now())
 			return
 		}
 
@@ -235,6 +237,7 @@ func (m *Manager) run(ctx context.Context) {
 			m.latestProcessesAt = time.Now()
 			m.processStatus = "fallback-ps"
 			m.mu.Unlock()
+			m.cadence.observeApps(time.Now())
 			return
 		}
 		if ctx.Err() == nil {
@@ -263,7 +266,7 @@ func (m *Manager) run(ctx context.Context) {
 
 	var latestBattery BatterySnapshot
 	haveBattery := false
-	emitSample := func(now time.Time, publishLive bool) {
+	emitSample := func(now time.Time, publishLive, persistNow bool) {
 		if !haveBattery {
 			return
 		}
@@ -297,11 +300,16 @@ func (m *Manager) run(ctx context.Context) {
 			latestBattery.Battery, latestBattery.Adapter,
 			pmSnap, processes, statuses, latestBattery.Diagnostics.Warnings,
 		)
-		if err := m.persist(sample); err != nil {
-			m.emitError(err)
+		if loggingEnabled {
+			if err := m.persist(sample, persistNow); err != nil {
+				m.emitError(err)
+			} else if persistNow {
+				m.cadence.observeLog(now)
+			}
 		}
 		if publishLive {
-			publishLatestSample(ctx, m.samples, sample)
+			replaced := publishLatestSample(ctx, m.samples, sample)
+			m.cadence.observeUI(now, replaced)
 		}
 	}
 
@@ -353,6 +361,7 @@ func (m *Manager) run(ctx context.Context) {
 			m.mu.Lock()
 			m.latestPM = snap
 			m.mu.Unlock()
+			m.cadence.observePowermetrics(time.Now())
 		case err, ok := <-pmErr:
 			if !ok {
 				pmErr = nil
@@ -369,9 +378,10 @@ func (m *Manager) run(ctx context.Context) {
 			first := !haveBattery
 			latestBattery = snapshot
 			haveBattery = true
+			m.cadence.observeBattery(time.Now())
 			if first {
 				now := time.Now()
-				emitSample(now, true)
+				emitSample(now, true, loggingEnabled)
 				startSampleSchedule(now)
 			}
 		case err, ok := <-batteryErr:
@@ -399,7 +409,8 @@ func (m *Manager) run(ctx context.Context) {
 		case <-sampleTimerC:
 			now := time.Now()
 			publishLive := !now.Before(nextLive)
-			emitSample(now, publishLive)
+			persistNow := loggingEnabled && !now.Before(nextLog)
+			emitSample(now, publishLive, persistNow)
 			if publishLive {
 				nextLive = advanceDeadline(nextLive, uiRefreshInterval, now)
 			}
@@ -477,20 +488,23 @@ func publishLatestBattery(ctx context.Context, out chan BatterySnapshot, snapsho
 	}
 }
 
-func publishLatestSample(ctx context.Context, out chan model.PowerSample, sample model.PowerSample) {
+func publishLatestSample(ctx context.Context, out chan model.PowerSample, sample model.PowerSample) bool {
 	select {
 	case out <- sample:
-		return
+		return false
 	default:
 	}
+	replaced := false
 	select {
 	case <-out:
+		replaced = true
 	default:
 	}
 	select {
 	case out <- sample:
 	case <-ctx.Done():
 	}
+	return replaced
 }
 
 func (m *Manager) compose(
@@ -632,12 +646,15 @@ func (m *Manager) transitionEvents(
 	return events
 }
 
-func (m *Manager) persist(s model.PowerSample) error {
+func (m *Manager) persist(s model.PowerSample, durable bool) error {
 	m.mu.RLock()
 	st := m.store
 	m.mu.RUnlock()
 	if st == nil {
 		return errors.New("session store unavailable")
+	}
+	if durable {
+		return st.WriteSample(s)
 	}
 	return st.OfferSample(s)
 }
@@ -701,6 +718,13 @@ func (m *Manager) Phase() string {
 	defer m.mu.RUnlock()
 	return m.phase
 }
+
+// CadenceDiagnostics returns a thread-safe snapshot of requested versus
+// observed collector, live publication, and durable logging intervals.
+func (m *Manager) CadenceDiagnostics() model.CadenceDiagnostics {
+	return m.cadence.snapshot()
+}
+
 func (m *Manager) LastSample() *model.PowerSample {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

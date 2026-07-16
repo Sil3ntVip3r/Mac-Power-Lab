@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -461,15 +462,21 @@ func writeMarkdown(path string, document reportDocument) error {
 			markdownCell(app.Confidence),
 		)
 	}
-	builder.WriteString("\n## Benchmark runs\n\n| Name | Status | Requested | Actual |\n|---|---|---:|---:|\n")
+	builder.WriteString(
+		"\n## Benchmark runs\n\n" +
+			"| Name | Status | Requested | Actual | Backend nice | Workload nice |\n" +
+			"|---|---|---:|---:|---:|---|\n",
+	)
 	for _, run := range summary.TestRuns {
 		fmt.Fprintf(
 			&builder,
-			"| %s | %s | %.0fs | %.1fs |\n",
+			"| %s | %s | %.0fs | %.1fs | %s | %s |\n",
 			markdownCell(run.Name),
 			markdownCell(run.Status),
 			run.RequestedSeconds,
 			run.ActualSeconds,
+			markdownCell(benchmarkBackendNice(run)),
+			markdownCell(benchmarkWorkloadNice(run)),
 		)
 	}
 	if len(summary.Warnings) > 0 {
@@ -481,16 +488,55 @@ func writeMarkdown(path string, document reportDocument) error {
 	return atomicWrite(path, []byte(builder.String()), 0o600)
 }
 
+func benchmarkBackendNice(run model.TestRun) string {
+	if run.Priority == nil {
+		return "n/a"
+	}
+	if !run.Priority.Supported {
+		return "unsupported"
+	}
+	return signedNice(run.Priority.ObservedBackendNice)
+}
+
+func benchmarkWorkloadNice(run model.TestRun) string {
+	if run.Priority == nil {
+		return "n/a"
+	}
+	if !run.Priority.Supported {
+		return "unsupported"
+	}
+	if len(run.Priority.Workloads) == 0 {
+		if len(run.Priority.Errors) > 0 {
+			return "capture failed"
+		}
+		return "none"
+	}
+	parts := make([]string, 0, len(run.Priority.Workloads))
+	for _, workload := range run.Priority.Workloads {
+		parts = append(parts, workload.Label+"="+signedNice(workload.Nice))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func signedNice(value int) string {
+	if value > 0 {
+		return "+" + strconv.Itoa(value)
+	}
+	return strconv.Itoa(value)
+}
+
 func markdownCell(value string) string {
 	value = strings.ReplaceAll(value, "|", "\\|")
 	return strings.ReplaceAll(value, "\n", " ")
 }
 
 var htmlTemplate = template.Must(template.New("report").Funcs(template.FuncMap{
-	"f":    func(value float64) string { return fmt.Sprintf("%.2f", value) },
-	"mins": func(value float64) string { return fmt.Sprintf("%.1f", value/60) },
-	"date": func(value time.Time) string { return value.Format(time.RFC3339) },
-}).Parse(`<!doctype html><html><head><meta charset="utf-8"><title>MacPowerLab Report</title><style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0b1016;color:#e6edf3;margin:0}main,header{max-width:1200px;margin:auto;padding:24px}header{background:#111b26}h2{color:#65e5ff;border-bottom:1px solid #263443;padding-bottom:8px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}.card{background:#111820;border:1px solid #253545;border-radius:12px;padding:15px}.value{font-size:24px;font-weight:700}table{width:100%;border-collapse:collapse;background:#111820}th,td{padding:9px;border-bottom:1px solid #263443;text-align:left}</style></head><body><header><h1>MacPowerLab v{{.Session.Version}}</h1><p>Session {{.Session.ID}} · {{.Session.OSVersion}} {{.Session.OSBuild}}</p><p>Generated {{date .GeneratedAt}} · Data through {{date .DataThrough}}</p></header><main><h2>Summary</h2><div class="grid"><div class="card">Peak load<div class="value">{{f .PeakPrimaryLoadW}} W</div></div><div class="card">Average load<div class="value">{{f .AveragePrimaryLoadW}} W</div></div><div class="card">Peak battery draw<div class="value">{{f .PeakBatteryDrawW}} W</div></div><div class="card">Discharged<div class="value">{{f .EnergyDischargedWh}} Wh</div></div><div class="card">Max battery temp<div class="value">{{f .MaxBatteryTempC}} °C</div></div><div class="card">Duration<div class="value">{{mins .DurationSeconds}} min</div></div></div><h2>Top applications</h2><table><tr><th>App</th><th>Dynamic W</th><th>Energy Wh</th><th>Impact</th><th>Confidence</th></tr>{{range .TopApps}}<tr><td>{{.Name}}</td><td>{{f .EstimatedDynamicW}}</td><td>{{f .EstimatedEnergyWh}}</td><td>{{f .EnergyImpact}}</td><td>{{.Confidence}}</td></tr>{{end}}</table><h2>Benchmark runs</h2><table><tr><th>Name</th><th>Status</th><th>Requested</th><th>Actual</th></tr>{{range .TestRuns}}<tr><td>{{.Name}}</td><td>{{.Status}}</td><td>{{f .RequestedSeconds}}s</td><td>{{f .ActualSeconds}}s</td></tr>{{end}}</table></main></body></html>`))
+	"f":            func(value float64) string { return fmt.Sprintf("%.2f", value) },
+	"mins":         func(value float64) string { return fmt.Sprintf("%.1f", value/60) },
+	"date":         func(value time.Time) string { return value.Format(time.RFC3339) },
+	"backendNice":  benchmarkBackendNice,
+	"workloadNice": benchmarkWorkloadNice,
+}).Parse(`<!doctype html><html><head><meta charset="utf-8"><title>MacPowerLab Report</title><style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0b1016;color:#e6edf3;margin:0}main,header{max-width:1200px;margin:auto;padding:24px}header{background:#111b26}h2{color:#65e5ff;border-bottom:1px solid #263443;padding-bottom:8px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}.card{background:#111820;border:1px solid #253545;border-radius:12px;padding:15px}.value{font-size:24px;font-weight:700}table{width:100%;border-collapse:collapse;background:#111820}th,td{padding:9px;border-bottom:1px solid #263443;text-align:left}</style></head><body><header><h1>MacPowerLab v{{.Session.Version}}</h1><p>Session {{.Session.ID}} · {{.Session.OSVersion}} {{.Session.OSBuild}}</p><p>Generated {{date .GeneratedAt}} · Data through {{date .DataThrough}}</p></header><main><h2>Summary</h2><div class="grid"><div class="card">Peak load<div class="value">{{f .PeakPrimaryLoadW}} W</div></div><div class="card">Average load<div class="value">{{f .AveragePrimaryLoadW}} W</div></div><div class="card">Peak battery draw<div class="value">{{f .PeakBatteryDrawW}} W</div></div><div class="card">Discharged<div class="value">{{f .EnergyDischargedWh}} Wh</div></div><div class="card">Max battery temp<div class="value">{{f .MaxBatteryTempC}} °C</div></div><div class="card">Duration<div class="value">{{mins .DurationSeconds}} min</div></div></div><h2>Top applications</h2><table><tr><th>App</th><th>Dynamic W</th><th>Energy Wh</th><th>Impact</th><th>Confidence</th></tr>{{range .TopApps}}<tr><td>{{.Name}}</td><td>{{f .EstimatedDynamicW}}</td><td>{{f .EstimatedEnergyWh}}</td><td>{{f .EnergyImpact}}</td><td>{{.Confidence}}</td></tr>{{end}}</table><h2>Benchmark runs</h2><table><tr><th>Name</th><th>Status</th><th>Requested</th><th>Actual</th><th>Backend nice</th><th>Workload nice</th></tr>{{range .TestRuns}}<tr><td>{{.Name}}</td><td>{{.Status}}</td><td>{{f .RequestedSeconds}}s</td><td>{{f .ActualSeconds}}s</td><td>{{backendNice .}}</td><td>{{workloadNice .}}</td></tr>{{end}}</table></main></body></html>`))
 
 func writeHTML(path string, document reportDocument) error {
 	var buffer bytes.Buffer

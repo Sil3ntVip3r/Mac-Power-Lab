@@ -29,6 +29,25 @@ func ValidateNice(value int) error {
 	return nil
 }
 
+// Current returns the current process nice value after waiting for any
+// in-flight benchmark normalization transition to complete.
+func Current() (int, error) {
+	processPriorityMu.Lock()
+	defer processPriorityMu.Unlock()
+	return processNice(0)
+}
+
+// ForPID returns one process's observed ordinary nice value. A PID must be
+// positive; process 0 is reserved for Current.
+func ForPID(pid int) (int, error) {
+	if pid <= 0 {
+		return 0, fmt.Errorf("process PID must be positive: %d", pid)
+	}
+	processPriorityMu.Lock()
+	defer processPriorityMu.Unlock()
+	return processNice(pid)
+}
+
 // Set changes the current process's ordinary nice value on macOS. Other
 // platforms validate and no-op so parser/report CI remains portable.
 func Set(ctx context.Context, value int) error {

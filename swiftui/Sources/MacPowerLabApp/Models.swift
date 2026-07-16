@@ -399,6 +399,66 @@ struct Session: Codable {
     }
 }
 
+struct ProcessPriorityObservation: Codable, Identifiable {
+    var id: String { "\(pid)-\(label)" }
+
+    let pid: Int
+    let label: String
+    let nice: Int
+}
+
+struct BenchmarkPriorityObservation: Codable {
+    let capturedAt: Date
+    let supported: Bool
+    let requestedBackendNice: Int
+    let observedBackendNice: Int
+    let requestedWorkloadNice: Int
+    let workloads: [ProcessPriorityObservation]?
+    let errors: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case supported, workloads, errors
+        case capturedAt = "captured_at"
+        case requestedBackendNice = "requested_backend_nice"
+        case observedBackendNice = "observed_backend_nice"
+        case requestedWorkloadNice = "requested_workload_nice"
+    }
+}
+
+struct CadenceMetric: Codable {
+    let requestedMS: Int64
+    let observedMS: Double?
+    let observations: UInt64?
+    let lastAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case observations
+        case requestedMS = "requested_ms"
+        case observedMS = "observed_ms"
+        case lastAt = "last_at"
+    }
+}
+
+struct CadenceDiagnostics: Codable {
+    let uiRefresh: CadenceMetric
+    let batteryCollection: CadenceMetric
+    let powermetrics: CadenceMetric
+    let appAttribution: CadenceMetric
+    let durableLogging: CadenceMetric
+    let livePublications: UInt64?
+    let replacedStreamFrames: UInt64?
+
+    enum CodingKeys: String, CodingKey {
+        case powermetrics
+        case uiRefresh = "ui_refresh"
+        case batteryCollection = "battery_collection"
+        case appAttribution = "app_attribution"
+        case durableLogging = "durable_logging"
+        case livePublications = "live_publications"
+        case replacedStreamFrames = "replaced_stream_frames"
+    }
+}
+
 struct BenchmarkProgress: Codable {
     let running: Bool
     let plan: String?
@@ -410,9 +470,10 @@ struct BenchmarkProgress: Codable {
     let remainingSeconds: Double?
     let status: String?
     let error: String?
+    let priority: BenchmarkPriorityObservation?
 
     enum CodingKeys: String, CodingKey {
-        case running, plan, phase, percent, status, error
+        case running, plan, phase, percent, status, error, priority
         case phaseIndex = "phase_index"
         case phaseCount = "phase_count"
         case elapsedSeconds = "elapsed_seconds"
@@ -447,11 +508,12 @@ struct EngineStatus: Codable {
     let session: Session?
     let lastSample: PowerSample?
     let benchmark: BenchmarkProgress
+    let cadence: CadenceDiagnostics?
     let capabilities: [String: Bool]?
     let errors: [String]?
 
     enum CodingKeys: String, CodingKey {
-        case version, session, benchmark, capabilities, errors
+        case version, session, benchmark, cadence, capabilities, errors
         case monitorRunning = "monitor_running"
         case lastSample = "last_sample"
     }

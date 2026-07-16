@@ -173,3 +173,17 @@ See [`docs/product/PRODUCT_VISION.md`](docs/product/PRODUCT_VISION.md),
 [`docs/product/UX_PRINCIPLES.md`](docs/product/UX_PRINCIPLES.md),
 [`docs/product/PRIVACY_PRINCIPLES.md`](docs/product/PRIVACY_PRINCIPLES.md), and
 [`docs/ROADMAP.md`](docs/ROADMAP.md).
+
+## Cadence and priority diagnostics
+
+The Settings and Full Monitor workspaces compare requested and observed live, battery, `powermetrics`, application, and durable-log cadences. Benchmark results capture actual backend and workload niceness while native workload processes are running.
+
+## Sanitized support bundle
+
+Create a support archive without local API credentials or private-key material:
+
+```bash
+./bin/macpowerlab support pack
+```
+
+The default bundle is written to `~/Downloads`. The archive manifest lists excluded paths and reasons, but excluded file contents are never opened or packaged.

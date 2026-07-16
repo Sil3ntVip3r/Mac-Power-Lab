@@ -63,6 +63,8 @@ func run(args []string) error {
 		return runSensors(args[1:])
 	case "logs":
 		return runLogs(args[1:])
+	case "support":
+		return runSupport(args[1:])
 	case "parity":
 		return runParity(args[1:])
 	case "parse":
@@ -635,6 +637,38 @@ func runLogs(args []string) error {
 	return nil
 }
 
+func runSupport(args []string) error {
+	if len(args) == 0 || args[0] != "pack" {
+		return errors.New("usage: macpowerlab support pack [--output FILE]")
+	}
+	cfg := config.Default()
+	fs := flag.NewFlagSet("support pack", flag.ContinueOnError)
+	bindings := commonFlags(fs, &cfg)
+	output := fs.String("output", "", "sanitized support archive output path")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if err := bindings.apply(fs); err != nil {
+		return err
+	}
+	if *output == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		*output = filepath.Join(
+			home,
+			"Downloads",
+			archive.DefaultName("MacPowerLab_Support"),
+		)
+	}
+	if err := archive.Create(cfg.DataDir, *output); err != nil {
+		return err
+	}
+	fmt.Println(*output)
+	return nil
+}
+
 func runParity(args []string) error {
 	cfg := config.Default()
 	fs := flag.NewFlagSet("parity", flag.ContinueOnError)
@@ -818,6 +852,7 @@ Usage:
   macpowerlab compare
   macpowerlab sensors scan
   macpowerlab logs pack [session-dir]
+  macpowerlab support pack [--output FILE]
   macpowerlab parity [--iterations 3]
   macpowerlab parse plist|powermetrics|legacy-csv FILE
   macpowerlab serve [--auto-monitor]

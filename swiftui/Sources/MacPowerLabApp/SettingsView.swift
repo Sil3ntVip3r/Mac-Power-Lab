@@ -9,6 +9,7 @@ struct SettingsView: View {
         Form {
             runtimeProfileSection
             cadenceSection
+            cadenceDiagnosticsSection
             loggingSection
             prioritySection
             applySection
@@ -84,6 +85,43 @@ struct SettingsView: View {
             )
         }
         .disabled(settingsUnavailable)
+    }
+
+    private var cadenceDiagnosticsSection: some View {
+        Section("Cadence diagnostics") {
+            cadenceRow(
+                "SwiftUI status polling",
+                requestedMS: model.runtimeSettings?.uiRefreshMS,
+                observedMS: model.observedUIRefreshMS,
+                observations: nil
+            )
+            cadenceRow("Backend live publication", metric: model.status?.cadence?.uiRefresh)
+            cadenceRow("Battery collection", metric: model.status?.cadence?.batteryCollection)
+            cadenceRow("powermetrics", metric: model.status?.cadence?.powermetrics)
+            cadenceRow("Application attribution", metric: model.status?.cadence?.appAttribution)
+            cadenceRow("Durable logging", metric: model.status?.cadence?.durableLogging)
+            LabeledContent(
+                "Backend live publications",
+                value: String(model.status?.cadence?.livePublications ?? 0)
+            )
+            LabeledContent(
+                "Client-skipped publications",
+                value: String(model.missedLivePublications)
+            )
+            LabeledContent(
+                "Replaced stream frames",
+                value: String(model.status?.cadence?.replacedStreamFrames ?? 0)
+            )
+
+            Text(
+                "Observed values are smoothed delivery intervals. Client-skipped publications show "
+                + "how many backend live updates arrived between successful SwiftUI polls. Replaced "
+                + "stream frames apply to channel consumers such as the terminal monitor; MacPowerLab "
+                + "keeps the newest value rather than building a backlog."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
     }
 
     private var loggingSection: some View {
@@ -319,6 +357,42 @@ struct SettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private func cadenceRow(_ title: String, metric: CadenceMetric?) -> some View {
+        cadenceRow(
+            title,
+            requestedMS: metric?.requestedMS,
+            observedMS: metric?.observedMS,
+            observations: metric?.observations
+        )
+    }
+
+    private func cadenceRow(
+        _ title: String,
+        requestedMS: Int64?,
+        observedMS: Double?,
+        observations: UInt64?
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            LabeledContent(
+                title,
+                value: cadenceLabel(requestedMS: requestedMS, observedMS: observedMS)
+            )
+            if let observations {
+                Text("\(observations) measured intervals")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    private func cadenceLabel(requestedMS: Int64?, observedMS: Double?) -> String {
+        let requested = requestedMS.map(durationLabel) ?? "off"
+        guard let observedMS, observedMS > 0 else {
+            return "Requested \(requested) · Observing…"
+        }
+        return "Requested \(requested) · Observed \(durationLabel(Int64(observedMS.rounded())))"
     }
 
     private func synchronizeDraft(_ settings: RuntimeSettings?) {

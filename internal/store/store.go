@@ -40,19 +40,17 @@ type SessionStore struct {
 	tests            *jsonlWriter
 	sqlite           sqliteMirror
 	sampleLogging    bool
-	logInterval      time.Duration
 	pendingSample    *model.PowerSample
 	lastSampleLogged time.Time
 	closed           bool
 }
 
-// SessionOptions configures optional mirrors and the durable live-sample gate.
-// A zero LogInterval with SampleLogging enabled preserves the direct-write
-// behavior used by compatibility callers and tests.
+// SessionOptions configures optional mirrors and durable sample availability.
+// The collector manager owns the durable cadence; the store only keeps one
+// latest pending sample between explicit durable writes.
 type SessionOptions struct {
 	SQLite        bool
 	SampleLogging bool
-	LogInterval   time.Duration
 }
 
 // SessionSnapshot is an immutable byte-range view of one session at a precise
@@ -157,13 +155,6 @@ func NewSessionWithOptions(
 	if strings.TrimSpace(session.ID) == "" {
 		return nil, errors.New("session ID is required")
 	}
-	if options.LogInterval < 0 {
-		return nil, errors.New("sample log interval must not be negative")
-	}
-	if !options.SampleLogging && options.LogInterval != 0 {
-		return nil, errors.New("sample log interval must be zero when sample logging is disabled")
-	}
-
 	sessionsDir := filepath.Join(base, "sessions")
 	if err := os.MkdirAll(sessionsDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create sessions directory: %w", err)
@@ -184,7 +175,6 @@ func NewSessionWithOptions(
 		Dir:           dir,
 		Session:       session,
 		sampleLogging: options.SampleLogging,
-		logInterval:   options.LogInterval,
 	}
 	cleanupWriters := func() {
 		_ = errors.Join(
@@ -242,6 +232,12 @@ func (s *SessionStore) WriteSample(v model.PowerSample) error {
 	if s.closed {
 		return errors.New("store closed")
 	}
+	if !s.sampleLogging {
+		return nil
+	}
+	if err := s.validateSampleTimestampLocked(v.Timestamp); err != nil {
+		return err
+	}
 	err := s.writeSampleLocked(v)
 	if s.lastSampleLogged.Equal(v.Timestamp) {
 		s.pendingSample = nil
@@ -249,9 +245,8 @@ func (s *SessionStore) WriteSample(v model.PowerSample) error {
 	return err
 }
 
-// OfferSample accepts every live sample while durably writing only at the
-// configured cadence. Between writes it retains exactly one deep-copied latest
-// sample, replacing any older pending value.
+// OfferSample replaces the one in-memory pending sample without performing a
+// durable write. The collector manager is the single owner of the log clock.
 func (s *SessionStore) OfferSample(v model.PowerSample) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -261,30 +256,30 @@ func (s *SessionStore) OfferSample(v model.PowerSample) error {
 	if !s.sampleLogging {
 		return nil
 	}
-	if !s.lastSampleLogged.IsZero() && !v.Timestamp.After(s.lastSampleLogged) {
+	if err := s.validateSampleTimestampLocked(v.Timestamp); err != nil {
+		return err
+	}
+	if s.pendingSample != nil && !v.Timestamp.After(s.pendingSample.Timestamp) {
 		return fmt.Errorf(
-			"live sample timestamp must advance beyond %s: %s",
-			s.lastSampleLogged.Format(time.RFC3339Nano),
+			"pending sample timestamp must advance beyond %s: %s",
+			s.pendingSample.Timestamp.Format(time.RFC3339Nano),
 			v.Timestamp.Format(time.RFC3339Nano),
 		)
 	}
-	due := s.logInterval == 0 ||
-		s.lastSampleLogged.IsZero() ||
-		!v.Timestamp.Before(s.lastSampleLogged.Add(s.logInterval))
-	if !due {
-		copyValue := clonePowerSample(v)
-		s.pendingSample = &copyValue
-		return nil
-	}
+	copyValue := clonePowerSample(v)
+	s.pendingSample = &copyValue
+	return nil
+}
 
-	err := s.writeSampleLocked(v)
-	if s.lastSampleLogged.Equal(v.Timestamp) {
-		s.pendingSample = nil
-	} else {
-		copyValue := clonePowerSample(v)
-		s.pendingSample = &copyValue
+func (s *SessionStore) validateSampleTimestampLocked(timestamp time.Time) error {
+	if !s.lastSampleLogged.IsZero() && !timestamp.After(s.lastSampleLogged) {
+		return fmt.Errorf(
+			"sample timestamp must advance beyond %s: %s",
+			s.lastSampleLogged.Format(time.RFC3339Nano),
+			timestamp.Format(time.RFC3339Nano),
+		)
 	}
-	return err
+	return nil
 }
 
 func (s *SessionStore) writeSampleLocked(v model.PowerSample) error {

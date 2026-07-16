@@ -180,20 +180,21 @@ type Event struct {
 
 // TestRun records a benchmark phase or standalone workload.
 type TestRun struct {
-	Schema           string            `json:"schema"`
-	ID               string            `json:"id"`
-	SessionID        string            `json:"session_id"`
-	Name             string            `json:"name"`
-	Plan             string            `json:"plan"`
-	Phase            string            `json:"phase"`
-	Status           string            `json:"status"`
-	StartedAt        time.Time         `json:"started_at"`
-	EndedAt          time.Time         `json:"ended_at,omitempty"`
-	RequestedSeconds float64           `json:"requested_seconds"`
-	ActualSeconds    float64           `json:"actual_seconds,omitempty"`
-	Commands         [][]string        `json:"commands,omitempty"`
-	Metadata         map[string]string `json:"metadata,omitempty"`
-	Error            string            `json:"error,omitempty"`
+	Schema           string                        `json:"schema"`
+	ID               string                        `json:"id"`
+	SessionID        string                        `json:"session_id"`
+	Name             string                        `json:"name"`
+	Plan             string                        `json:"plan"`
+	Phase            string                        `json:"phase"`
+	Status           string                        `json:"status"`
+	StartedAt        time.Time                     `json:"started_at"`
+	EndedAt          time.Time                     `json:"ended_at,omitempty"`
+	RequestedSeconds float64                       `json:"requested_seconds"`
+	ActualSeconds    float64                       `json:"actual_seconds,omitempty"`
+	Commands         [][]string                    `json:"commands,omitempty"`
+	Metadata         map[string]string             `json:"metadata,omitempty"`
+	Priority         *BenchmarkPriorityObservation `json:"priority,omitempty"`
+	Error            string                        `json:"error,omitempty"`
 }
 
 // RuntimeSettings is the versioned, effective collection and persistence
@@ -238,32 +239,76 @@ type Session struct {
 	Metadata         map[string]string           `json:"metadata,omitempty"`
 }
 
+// ProcessPriorityObservation records one live benchmark workload process while
+// it is running. Nice values are ordinary BSD process niceness, not real-time
+// or kernel scheduling classes.
+type ProcessPriorityObservation struct {
+	PID   int    `json:"pid"`
+	Label string `json:"label"`
+	Nice  int    `json:"nice"`
+}
+
+// BenchmarkPriorityObservation proves the monitor and benchmark workload
+// priorities that were actually observed during a running phase.
+type BenchmarkPriorityObservation struct {
+	CapturedAt            time.Time                    `json:"captured_at"`
+	Supported             bool                         `json:"supported"`
+	RequestedBackendNice  int                          `json:"requested_backend_nice"`
+	ObservedBackendNice   int                          `json:"observed_backend_nice"`
+	RequestedWorkloadNice int                          `json:"requested_workload_nice"`
+	Workloads             []ProcessPriorityObservation `json:"workloads,omitempty"`
+	Errors                []string                     `json:"errors,omitempty"`
+}
+
+// CadenceMetric compares a requested cadence with a smoothed observed cadence.
+// ObservedMS is an exponentially weighted moving average of completed intervals.
+type CadenceMetric struct {
+	RequestedMS  int64     `json:"requested_ms"`
+	ObservedMS   float64   `json:"observed_ms,omitempty"`
+	Observations uint64    `json:"observations,omitempty"`
+	LastAt       time.Time `json:"last_at,omitempty"`
+}
+
+// CadenceDiagnostics makes real-time behavior measurable rather than inferred
+// from durable JSONL line counts.
+type CadenceDiagnostics struct {
+	UIRefresh            CadenceMetric `json:"ui_refresh"`
+	BatteryCollection    CadenceMetric `json:"battery_collection"`
+	Powermetrics         CadenceMetric `json:"powermetrics"`
+	AppAttribution       CadenceMetric `json:"app_attribution"`
+	DurableLogging       CadenceMetric `json:"durable_logging"`
+	LivePublications     uint64        `json:"live_publications,omitempty"`
+	ReplacedStreamFrames uint64        `json:"replaced_stream_frames,omitempty"`
+}
+
 // BenchmarkProgress drives the terminal and SwiftUI progress surfaces.
 type BenchmarkProgress struct {
-	Running       bool      `json:"running"`
-	Plan          string    `json:"plan,omitempty"`
-	Phase         string    `json:"phase,omitempty"`
-	PhaseIndex    int       `json:"phase_index,omitempty"`
-	PhaseCount    int       `json:"phase_count,omitempty"`
-	PhaseStarted  time.Time `json:"phase_started,omitempty"`
-	PhaseDuration float64   `json:"phase_duration_seconds,omitempty"`
-	Elapsed       float64   `json:"elapsed_seconds,omitempty"`
-	Remaining     float64   `json:"remaining_seconds,omitempty"`
-	Percent       float64   `json:"percent,omitempty"`
-	Status        string    `json:"status,omitempty"`
-	Error         string    `json:"error,omitempty"`
+	Running       bool                          `json:"running"`
+	Plan          string                        `json:"plan,omitempty"`
+	Phase         string                        `json:"phase,omitempty"`
+	PhaseIndex    int                           `json:"phase_index,omitempty"`
+	PhaseCount    int                           `json:"phase_count,omitempty"`
+	PhaseStarted  time.Time                     `json:"phase_started,omitempty"`
+	PhaseDuration float64                       `json:"phase_duration_seconds,omitempty"`
+	Elapsed       float64                       `json:"elapsed_seconds,omitempty"`
+	Remaining     float64                       `json:"remaining_seconds,omitempty"`
+	Percent       float64                       `json:"percent,omitempty"`
+	Status        string                        `json:"status,omitempty"`
+	Error         string                        `json:"error,omitempty"`
+	Priority      *BenchmarkPriorityObservation `json:"priority,omitempty"`
 }
 
 // Status is the current engine status exposed to the TUI and local API.
 type Status struct {
-	Schema         string            `json:"schema"`
-	Version        string            `json:"version"`
-	MonitorRunning bool              `json:"monitor_running"`
-	Session        *Session          `json:"session,omitempty"`
-	LastSample     *PowerSample      `json:"last_sample,omitempty"`
-	Benchmark      BenchmarkProgress `json:"benchmark"`
-	Capabilities   map[string]bool   `json:"capabilities,omitempty"`
-	Errors         []string          `json:"errors,omitempty"`
+	Schema         string              `json:"schema"`
+	Version        string              `json:"version"`
+	MonitorRunning bool                `json:"monitor_running"`
+	Session        *Session            `json:"session,omitempty"`
+	LastSample     *PowerSample        `json:"last_sample,omitempty"`
+	Benchmark      BenchmarkProgress   `json:"benchmark"`
+	Cadence        *CadenceDiagnostics `json:"cadence,omitempty"`
+	Capabilities   map[string]bool     `json:"capabilities,omitempty"`
+	Errors         []string            `json:"errors,omitempty"`
 }
 
 // SessionSummary is the stable report contract generated from a session.

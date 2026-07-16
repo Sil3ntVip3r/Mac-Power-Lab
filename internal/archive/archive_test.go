@@ -1,9 +1,14 @@
 package archive
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
+	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -21,6 +26,71 @@ func TestCreate(t *testing.T) {
 	}
 	if info, err := os.Stat(out); err != nil || info.Size() == 0 {
 		t.Fatalf("archive err=%v info=%v", err, info)
+	}
+}
+
+func TestCreateExcludesCredentialsAndTransientFiles(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "MacPowerLab")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, contents := range map[string]string{
+		"session.json":                       "safe",
+		"api.token":                          "secret",
+		"api.token.address":                  "127.0.0.1",
+		"Launch MacPowerLab Backend.command": "private path",
+		"session.sqlite3-wal":                "transient",
+		"private.pem":                        "key",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := filepath.Join(t.TempDir(), "support.tar.gz")
+	if err := Create(root, out); err != nil {
+		t.Fatal(err)
+	}
+
+	file, err := os.Open(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	gzipReader, err := gzip.NewReader(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gzipReader.Close()
+	tarReader := tar.NewReader(gzipReader)
+	var manifest Manifest
+	seen := make(map[string]bool)
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen[header.Name] = true
+		if header.Name == "MANIFEST_macpowerlab.json" {
+			if err := json.NewDecoder(tarReader).Decode(&manifest); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if !seen["MacPowerLab/session.json"] {
+		t.Fatalf("safe file missing: %v", seen)
+	}
+	for name := range seen {
+		lower := strings.ToLower(name)
+		if strings.Contains(lower, "token") || strings.HasSuffix(lower, ".pem") ||
+			strings.HasSuffix(lower, ".sqlite3-wal") || strings.Contains(lower, "launch macpowerlab") {
+			t.Fatalf("sensitive file was archived: %s", name)
+		}
+	}
+	if len(manifest.Excluded) != 5 {
+		t.Fatalf("excluded=%+v", manifest.Excluded)
 	}
 }
 

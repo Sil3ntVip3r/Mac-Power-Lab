@@ -25,6 +25,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var runtimeProfiles: [RuntimeProfileDefinition] = []
     @Published private(set) var isApplyingSettings = false
     @Published private(set) var settingsMessage: String?
+    @Published private(set) var observedUIRefreshMS: Double?
+    @Published private(set) var missedLivePublications: UInt64 = 0
 
     @Published var benchmarkCatalog: [BenchmarkDefinition] = BenchmarkDefinition.fallbackCatalog
     @Published var selectedBenchmark = "quick"
@@ -47,6 +49,8 @@ final class AppModel: ObservableObject {
     private let api = APIClient()
     private let launcher = BackendLauncher()
     private var pollingTask: Task<Void, Never>?
+    private var lastSuccessfulStatusAt: Date?
+    private var lastLivePublicationCount: UInt64?
 
     var selectedDefinition: BenchmarkDefinition? {
         benchmarkCatalog.first { $0.id == selectedBenchmark }
@@ -252,10 +256,34 @@ final class AppModel: ObservableObject {
 
     private func startPolling() {
         pollingTask?.cancel()
+        lastSuccessfulStatusAt = nil
+        lastLivePublicationCount = nil
+        observedUIRefreshMS = nil
+        missedLivePublications = 0
         pollingTask = Task {
             while !Task.isCancelled {
                 do {
-                    status = try await api.status()
+                    let updatedStatus = try await api.status()
+                    let now = Date()
+                    if let previous = lastSuccessfulStatusAt {
+                        let intervalMS = now.timeIntervalSince(previous) * 1_000
+                        if intervalMS > 0 {
+                            if let current = observedUIRefreshMS {
+                                observedUIRefreshMS = current * 0.75 + intervalMS * 0.25
+                            } else {
+                                observedUIRefreshMS = intervalMS
+                            }
+                        }
+                    }
+                    lastSuccessfulStatusAt = now
+                    if let count = updatedStatus.cadence?.livePublications {
+                        if let previous = lastLivePublicationCount, count > previous + 1 {
+                            missedLivePublications += count - previous - 1
+                        }
+                        lastLivePublicationCount = count
+                    }
+                    status = updatedStatus
+                    errorMessage = nil
                 } catch {
                     errorMessage = error.localizedDescription
                 }

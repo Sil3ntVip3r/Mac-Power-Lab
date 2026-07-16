@@ -74,3 +74,9 @@ func TestZeroPriorityStartsWithoutProcessTransition(t *testing.T) {
 		t.Fatal("child was not started")
 	}
 }
+
+func TestForPIDRejectsNonPositivePID(t *testing.T) {
+	if _, err := ForPID(0); err == nil {
+		t.Fatal("expected PID validation error")
+	}
+}

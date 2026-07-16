@@ -51,7 +51,9 @@ This prevents one session from containing samples produced under different runti
 
 UI refresh, battery collection, system `powermetrics`, app attribution, and durable logging are independent. A faster live cadence does not force every live sample into storage.
 
-After a durable write, MacPowerLab retains only one deep-copied pending sample. New live samples replace it until the next log boundary. The pending sample is flushed before report snapshots, shutdown, runtime-profile restarts, and benchmark phase transitions. Routine buffer synchronization does not flush it early.
+The collector manager owns the durable clock. On a live-only deadline it stages one deep-copied latest pending sample; on a durable deadline it writes the newly composed sample directly. The store does not apply a second interval calculation. The pending sample is flushed before report snapshots, shutdown, runtime-profile restarts, and benchmark phase transitions. Routine buffer synchronization does not flush it early.
+
+The Settings and Full Monitor pages show requested versus smoothed observed cadences. SwiftUI also measures successful status-poll delivery and counts backend live publications skipped between polls, which separates client rendering behavior from durable JSONL cadence.
 
 Live-only mode continues live collection and display while leaving `samples.jsonl` and `apps.jsonl` empty. Session metadata, events, and benchmark phase records still persist.
 
@@ -110,3 +112,7 @@ Every new session records the complete runtime settings plus additive effective
 collection options: application attribution state, retained application count,
 SQLite mirror state, and safe mode. This makes sessions produced by CLI
 overrides reproducible and comparable.
+
+## Benchmark priority diagnostics
+
+Every running workload phase captures the backend nice value after restoration and each native workload process's actual nice value while that process is alive. The observation is retained in `test_runs.jsonl`, the live benchmark status, and generated reports.

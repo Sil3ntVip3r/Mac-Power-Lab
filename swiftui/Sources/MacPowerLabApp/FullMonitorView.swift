@@ -167,7 +167,39 @@ struct FullMonitorView: View {
                             MonitorStat(title: "Remaining", value: MPLFormat.duration(benchmark?.remainingSeconds)),
                             MonitorStat(title: "Status", value: MPLFormat.text(benchmark?.status)),
                             MonitorStat(title: "Error", value: MPLFormat.text(benchmark?.error)),
+                            MonitorStat(
+                                title: "Backend nice",
+                                value: niceValue(benchmark?.priority?.observedBackendNice),
+                                detail: benchmark?.priority.map { "Requested \(niceValue($0.requestedBackendNice))" }
+                            ),
+                            MonitorStat(
+                                title: "Workload nice",
+                                value: workloadNiceSummary(benchmark?.priority),
+                                detail: benchmark?.priority?.capturedAt.formatted(date: .omitted, time: .standard)
+                            ),
                         ])
+                    }
+
+                    if let cadence = status?.cadence {
+                        MonitorSection("Cadence Diagnostics", systemImage: "metronome") {
+                            MonitorStatGrid(items: [
+                                cadenceStat("Live publication", cadence.uiRefresh),
+                                cadenceStat("Battery collection", cadence.batteryCollection),
+                                cadenceStat("powermetrics", cadence.powermetrics),
+                                cadenceStat("Application attribution", cadence.appAttribution),
+                                cadenceStat("Durable logging", cadence.durableLogging),
+                                MonitorStat(
+                                    title: "Live publications",
+                                    value: String(cadence.livePublications ?? 0),
+                                    detail: "Backend live states published during this session."
+                                ),
+                                MonitorStat(
+                                    title: "Replaced stream frames",
+                                    value: String(cadence.replacedStreamFrames ?? 0),
+                                    detail: "Newest-value replacement prevents stream backlog."
+                                ),
+                            ])
+                        }
                     }
 
                     MonitorSection("Collector Status", systemImage: "waveform.badge.magnifyingglass") {
@@ -233,4 +265,39 @@ struct FullMonitorView: View {
             .padding()
         }
     }
+
+    private func cadenceStat(_ title: String, _ metric: CadenceMetric) -> MonitorStat {
+        let requested = cadenceDuration(Double(metric.requestedMS))
+        let observed = metric.observedMS.map(cadenceDuration) ?? "Observing…"
+        return MonitorStat(
+            title: title,
+            value: observed,
+            detail: "Requested \(requested) · \(metric.observations ?? 0) intervals"
+        )
+    }
+
+    private func cadenceDuration(_ milliseconds: Double) -> String {
+        if milliseconds < 1_000 {
+            return String(format: "%.0f ms", milliseconds)
+        }
+        return String(format: "%.2f s", milliseconds / 1_000)
+    }
+
+    private func niceValue(_ value: Int?) -> String {
+        guard let value else { return "n/a" }
+        return value > 0 ? "+\(value)" : "\(value)"
+    }
+
+    private func workloadNiceSummary(_ priority: BenchmarkPriorityObservation?) -> String {
+        guard let priority else { return "n/a" }
+        guard priority.supported else { return "Unsupported" }
+        guard let workloads = priority.workloads, !workloads.isEmpty else {
+            if let errors = priority.errors, !errors.isEmpty {
+                return "Capture failed"
+            }
+            return "None"
+        }
+        return workloads.map { "\($0.label): \(niceValue($0.nice))" }.joined(separator: ", ")
+    }
+
 }

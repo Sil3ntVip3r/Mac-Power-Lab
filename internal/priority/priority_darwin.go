@@ -13,9 +13,13 @@ import (
 )
 
 func currentNice() (int, error) {
-	value, err := syscall.Getpriority(syscall.PRIO_PROCESS, 0)
+	return processNice(0)
+}
+
+func processNice(pid int) (int, error) {
+	value, err := syscall.Getpriority(syscall.PRIO_PROCESS, pid)
 	if err != nil {
-		return 0, fmt.Errorf("read process nice: %w", err)
+		return 0, fmt.Errorf("read process %d nice: %w", pid, err)
 	}
 	return value, nil
 }

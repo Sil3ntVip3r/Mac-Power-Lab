@@ -25,10 +25,16 @@ type Entry struct {
 	SHA256 string `json:"sha256"`
 }
 
+type ExcludedEntry struct {
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
+}
+
 type Manifest struct {
-	CreatedAt time.Time `json:"created_at"`
-	Root      string    `json:"root"`
-	Files     []Entry   `json:"files"`
+	CreatedAt time.Time       `json:"created_at"`
+	Root      string          `json:"root"`
+	Files     []Entry         `json:"files"`
+	Excluded  []ExcludedEntry `json:"excluded,omitempty"`
 }
 
 // Create writes a reproducible tar.gz with BestCompression and a SHA-256
@@ -58,7 +64,7 @@ func Create(root, out string) (retErr error) {
 		return errors.New("archive output must be outside the archived root")
 	}
 
-	paths, err := regularFiles(root)
+	paths, excluded, err := regularFiles(root)
 	if err != nil {
 		return err
 	}
@@ -93,6 +99,7 @@ func Create(root, out string) (retErr error) {
 		CreatedAt: reproducibleTime,
 		Root:      filepath.Base(root),
 		Files:     make([]Entry, 0, len(paths)),
+		Excluded:  excluded,
 	}
 
 	closeWriters := func() error {
@@ -138,8 +145,9 @@ func Create(root, out string) (retErr error) {
 	return nil
 }
 
-func regularFiles(root string) ([]string, error) {
+func regularFiles(root string) ([]string, []ExcludedEntry, error) {
 	paths := make([]string, 0, 64)
+	excluded := make([]ExcludedEntry, 0, 8)
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -157,14 +165,48 @@ func regularFiles(root string) ([]string, error) {
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("refusing non-regular archive entry: %s", path)
 		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		if reason := archiveExclusionReason(relative); reason != "" {
+			excluded = append(excluded, ExcludedEntry{
+				Path:   filepath.ToSlash(relative),
+				Reason: reason,
+			})
+			return nil
+		}
 		paths = append(paths, path)
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	sort.Strings(paths)
-	return paths, nil
+	sort.Slice(excluded, func(i, j int) bool {
+		return excluded[i].Path < excluded[j].Path
+	})
+	return paths, excluded, nil
+}
+
+func archiveExclusionReason(relative string) string {
+	base := strings.ToLower(filepath.Base(relative))
+	switch {
+	case base == "api.token", base == "api.token.address":
+		return "local API credential"
+	case strings.Contains(base, "token"):
+		return "potential credential"
+	case base == "launch macpowerlab backend.command":
+		return "local launcher may contain private paths or credentials"
+	case base == ".ds_store":
+		return "Finder metadata"
+	case strings.HasSuffix(base, ".sqlite3-wal"), strings.HasSuffix(base, ".sqlite3-shm"):
+		return "transient SQLite sidecar"
+	case strings.HasSuffix(base, ".pem"), strings.HasSuffix(base, ".key"), strings.HasSuffix(base, ".p12"):
+		return "private key material"
+	default:
+		return ""
+	}
 }
 
 func writeRegularFile(writer *tar.Writer, root, path string) (Entry, error) {
@@ -199,7 +241,10 @@ func writeRegularFile(writer *tar.Writer, root, path string) (Entry, error) {
 	}
 
 	hash := sha256.New()
-	written, copyErr := io.Copy(io.MultiWriter(writer, hash), source)
+	// Capture exactly the size observed after opening. Active JSONL and log files
+	// may continue growing while a support bundle is created; later bytes belong
+	// to a future bundle and must not make this snapshot fail or become unbounded.
+	written, copyErr := io.CopyN(io.MultiWriter(writer, hash), source, opened.Size())
 	if copyErr != nil {
 		return Entry{}, copyErr
 	}

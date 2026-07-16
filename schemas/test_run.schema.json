@@ -17,6 +17,66 @@
   "properties": {
     "schema": {
       "const": "macpowerlab.test_run.v1"
+    },
+    "priority": {
+      "type": "object",
+      "required": [
+        "captured_at",
+        "supported",
+        "requested_backend_nice",
+        "observed_backend_nice",
+        "requested_workload_nice"
+      ],
+      "properties": {
+        "captured_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "supported": {
+          "type": "boolean"
+        },
+        "requested_backend_nice": {
+          "type": "integer"
+        },
+        "observed_backend_nice": {
+          "type": "integer"
+        },
+        "requested_workload_nice": {
+          "type": "integer"
+        },
+        "workloads": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "pid",
+              "label",
+              "nice"
+            ],
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1
+              },
+              "nice": {
+                "type": "integer"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": true

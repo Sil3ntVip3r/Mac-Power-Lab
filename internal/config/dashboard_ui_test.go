@@ -214,3 +214,44 @@ func TestRuntimeSettingsControlsCoverAPIAndSafetySemantics(t *testing.T) {
 		}
 	}
 }
+
+func TestCadenceDiagnosticsAndBenchmarkPriorityAreVisible(t *testing.T) {
+	models := readSwiftUIFile(t, "Models.swift")
+	settings := readSwiftUIFile(t, "SettingsView.swift")
+	full := readSwiftUIFile(t, "FullMonitorView.swift")
+	appModel := readSwiftUIFile(t, "AppModel.swift")
+
+	for _, required := range []string{
+		"CadenceDiagnostics",
+		"CadenceMetric",
+		"BenchmarkPriorityObservation",
+		"ProcessPriorityObservation",
+	} {
+		if !strings.Contains(models, required) {
+			t.Fatalf("Models.swift missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		"Cadence diagnostics",
+		"SwiftUI status polling",
+		"Replaced stream frames",
+	} {
+		if !strings.Contains(settings, required) {
+			t.Fatalf("SettingsView.swift missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		"Cadence Diagnostics",
+		"Backend nice",
+		"Workload nice",
+	} {
+		if !strings.Contains(full, required) {
+			t.Fatalf("FullMonitorView.swift missing %q", required)
+		}
+	}
+	for _, required := range []string{"observedUIRefreshMS", "missedLivePublications"} {
+		if !strings.Contains(appModel, required) {
+			t.Fatalf("AppModel.swift missing client cadence diagnostic %q", required)
+		}
+	}
+}

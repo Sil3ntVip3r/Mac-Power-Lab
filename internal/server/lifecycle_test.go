@@ -28,6 +28,7 @@ type fakeEngineMonitor struct {
 	session      model.Session
 	dir          string
 	sessionStore *store.SessionStore
+	cadence      model.CadenceDiagnostics
 }
 
 func (f *fakeEngineMonitor) Start(context.Context, map[string]string) error {
@@ -65,6 +66,9 @@ func (f *fakeEngineMonitor) SetPhase(value string) {
 	f.mu.Unlock()
 }
 func (f *fakeEngineMonitor) WriteTestRun(model.TestRun) error { return nil }
+func (f *fakeEngineMonitor) CadenceDiagnostics() model.CadenceDiagnostics {
+	return f.cadence
+}
 func (f *fakeEngineMonitor) Snapshot() (store.SessionSnapshot, error) {
 	if f.sessionStore != nil {
 		return f.sessionStore.Snapshot()
@@ -107,6 +111,30 @@ func testEngineDependencies(factory func() (monitor, error), runner benchmarkRun
 		ensureSudo:   func(context.Context, bool) error { return nil },
 		setPriority:  func(context.Context, int) error { return nil },
 		saveSettings: func(string, model.RuntimeSettings) error { return nil },
+	}
+}
+
+func TestStatusIncludesCadenceDiagnostics(t *testing.T) {
+	fake := &fakeEngineMonitor{
+		sample:  &model.PowerSample{Battery: model.BatterySample{PowerSource: "Battery Power"}},
+		session: model.Session{ID: "session"},
+		dir:     t.TempDir(),
+		cadence: model.CadenceDiagnostics{
+			UIRefresh:        model.CadenceMetric{RequestedMS: 500, ObservedMS: 510},
+			LivePublications: 42,
+		},
+	}
+	engine := newEngine(
+		config.Default(),
+		testEngineDependencies(func() (monitor, error) { return fake, nil }, newFakeEngineBenchmark()),
+	)
+	if err := engine.StartMonitor(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	status := engine.Status()
+	if status.Cadence == nil || status.Cadence.UIRefresh.RequestedMS != 500 ||
+		status.Cadence.LivePublications != 42 {
+		t.Fatalf("cadence=%+v", status.Cadence)
 	}
 }
 

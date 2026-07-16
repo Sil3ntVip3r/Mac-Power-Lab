@@ -137,11 +137,75 @@ func (f *fakeMonitor) WriteTestRun(value model.TestRun) error {
 
 func testControllerDependencies(workload func(context.Context, string, Phase, Options) error) controllerDependencies {
 	return controllerDependencies{
-		buildNative:    func(context.Context, string, string) error { return nil },
-		acquireLock:    func(string) (func(), error) { return func() {}, nil },
-		runWorkload:    workload,
+		buildNative: func(context.Context, string, string) error { return nil },
+		acquireLock: func(string) (func(), error) { return func() {}, nil },
+		runWorkload: func(
+			ctx context.Context,
+			dir string,
+			phase Phase,
+			opts Options,
+			_ priorityReporter,
+		) error {
+			return workload(ctx, dir, phase, opts)
+		},
 		startSleepLock: func(context.Context) (func(), error) { return func() {}, nil },
 		now:            time.Now,
+	}
+}
+
+func TestControllerPersistsObservedBenchmarkPriority(t *testing.T) {
+	monitor := &fakeMonitor{
+		sample:  &model.PowerSample{Battery: model.BatterySample{PowerSource: "Battery Power"}},
+		session: model.Session{ID: "session"},
+		dir:     t.TempDir(),
+	}
+	controller := newController(
+		monitor,
+		controllerDependencies{
+			buildNative: func(context.Context, string, string) error { return nil },
+			acquireLock: func(string) (func(), error) { return func() {}, nil },
+			runWorkload: func(
+				_ context.Context,
+				_ string,
+				_ Phase,
+				_ Options,
+				report priorityReporter,
+			) error {
+				report(model.BenchmarkPriorityObservation{
+					CapturedAt:            time.Now(),
+					Supported:             true,
+					RequestedBackendNice:  -5,
+					ObservedBackendNice:   -5,
+					RequestedWorkloadNice: 0,
+					Workloads: []model.ProcessPriorityObservation{{
+						PID:   123,
+						Label: "cpu_stress[1]",
+						Nice:  0,
+					}},
+				})
+				return nil
+			},
+			startSleepLock: func(context.Context) (func(), error) { return func() {}, nil },
+			now:            time.Now,
+		},
+	)
+	if err := controller.Run(
+		context.Background(),
+		Plan{Name: "test", Phases: []Phase{{Name: "phase", Kind: "cpu", Duration: time.Second}}},
+		Options{ProcessNice: -5},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(monitor.runs) != 2 {
+		t.Fatalf("runs=%+v", monitor.runs)
+	}
+	priority := monitor.runs[1].Priority
+	if priority == nil || priority.ObservedBackendNice != -5 || len(priority.Workloads) != 1 || priority.Workloads[0].Nice != 0 {
+		t.Fatalf("priority=%+v", priority)
+	}
+	progress := controller.Progress()
+	if progress.Priority == nil || progress.Priority.ObservedBackendNice != -5 || progress.Priority.Workloads[0].Nice != 0 {
+		t.Fatalf("progress priority=%+v", progress.Priority)
 	}
 }
 

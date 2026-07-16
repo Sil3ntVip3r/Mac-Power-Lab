@@ -159,7 +159,7 @@ func TestLiveSampleGateRetainsOnlyLatestPendingSample(t *testing.T) {
 	st, err := NewSessionWithOptions(
 		t.TempDir(),
 		model.Session{ID: "cadence", StartedAt: time.Now()},
-		SessionOptions{SampleLogging: true, LogInterval: 5 * time.Second},
+		SessionOptions{SampleLogging: true},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -189,21 +189,27 @@ func TestLiveSampleGateRetainsOnlyLatestPendingSample(t *testing.T) {
 	if err := st.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	if got := countSamples(t, st.Dir); got != 1 {
-		t.Fatalf("samples after periodic flush=%d want=1", got)
+	if got := countSamples(t, st.Dir); got != 0 {
+		t.Fatalf("samples after periodic flush=%d want=0", got)
 	}
 	if st.pendingSample == nil || st.pendingSample.Sequence != 3 || st.pendingSample.Warnings[0] != "original" {
 		t.Fatalf("pending sample=%+v", st.pendingSample)
 	}
 
-	// The next due live frame is written, and the superseded pending frame is
-	// intentionally discarded rather than replayed.
-	offer(4, 5*time.Second)
+	// The manager owns the durable clock and explicitly writes the cadence-due
+	// frame. The superseded pending frame is intentionally discarded.
+	if err := st.WriteSample(model.PowerSample{
+		SessionID: "cadence",
+		Sequence:  4,
+		Timestamp: base.Add(5 * time.Second),
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	if got := countSamples(t, st.Dir); got != 2 {
-		t.Fatalf("samples at cadence boundary=%d want=2", got)
+	if got := countSamples(t, st.Dir); got != 1 {
+		t.Fatalf("samples at cadence boundary=%d want=1", got)
 	}
 	if st.pendingSample != nil {
 		t.Fatalf("pending sample was not cleared: %+v", st.pendingSample)
@@ -214,7 +220,7 @@ func TestSnapshotAndCloseFlushLatestPendingSample(t *testing.T) {
 	st, err := NewSessionWithOptions(
 		t.TempDir(),
 		model.Session{ID: "boundaries", StartedAt: time.Now()},
-		SessionOptions{SampleLogging: true, LogInterval: time.Minute},
+		SessionOptions{SampleLogging: true},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -232,8 +238,8 @@ func TestSnapshotAndCloseFlushLatestPendingSample(t *testing.T) {
 	if _, err := st.Snapshot(); err != nil {
 		t.Fatal(err)
 	}
-	if got := countSamples(t, st.Dir); got != 2 {
-		t.Fatalf("snapshot samples=%d want first+latest=2", got)
+	if got := countSamples(t, st.Dir); got != 1 {
+		t.Fatalf("snapshot samples=%d want latest=1", got)
 	}
 	if err := st.OfferSample(model.PowerSample{
 		SessionID: "boundaries",
@@ -245,8 +251,8 @@ func TestSnapshotAndCloseFlushLatestPendingSample(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if got := countSamples(t, st.Dir); got != 3 {
-		t.Fatalf("close samples=%d want=3", got)
+	if got := countSamples(t, st.Dir); got != 2 {
+		t.Fatalf("close samples=%d want=2", got)
 	}
 }
 
@@ -291,7 +297,7 @@ func TestAppLogFailureDoesNotDuplicateCanonicalSample(t *testing.T) {
 	st, err := NewSessionWithOptions(
 		t.TempDir(),
 		model.Session{ID: "partial-write", StartedAt: time.Now()},
-		SessionOptions{SampleLogging: true, LogInterval: time.Minute},
+		SessionOptions{SampleLogging: true},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -301,7 +307,7 @@ func TestAppLogFailureDoesNotDuplicateCanonicalSample(t *testing.T) {
 	base := time.Unix(1_700_000_000, 0)
 	appWriter := st.apps
 	st.apps = nil
-	err = st.OfferSample(model.PowerSample{
+	err = st.WriteSample(model.PowerSample{
 		SessionID: "partial-write",
 		Sequence:  1,
 		Timestamp: base,
