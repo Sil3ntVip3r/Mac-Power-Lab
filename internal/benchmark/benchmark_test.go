@@ -3,6 +3,8 @@ package benchmark
 import (
 	"context"
 	"errors"
+	"os"
+	"os/signal"
 	"strings"
 	"sync"
 	"testing"
@@ -485,6 +487,32 @@ func TestRunPhasePreservesParentCancellationAfterSuccessfulCleanup(t *testing.T)
 	cancel()
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("parent cancellation was lost: %v", err)
+	}
+}
+
+func TestRunCommandsPreservesDeadlineForGracefulExit(t *testing.T) {
+	const helperEnvironment = "MACPOWERLAB_GRACEFUL_WORKLOAD_HELPER"
+	if os.Getenv(helperEnvironment) == "1" {
+		signals := make(chan os.Signal, 1)
+		signal.Notify(signals)
+		<-signals
+		os.Exit(0)
+	}
+
+	t.Setenv(helperEnvironment, "1")
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	err := runCommands(
+		ctx,
+		t.TempDir(),
+		"run",
+		"phase",
+		[][]string{{os.Args[0], "-test.run=^TestRunCommandsPreservesDeadlineForGracefulExit$"}},
+		0,
+		nil,
+	)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("deadline-driven graceful exit was accepted: %v", err)
 	}
 }
 

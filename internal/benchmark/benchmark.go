@@ -746,45 +746,30 @@ func runCommands(
 	}
 
 	type waitResult struct {
-		label string
-		err   error
+		label        string
+		err          error
+		contextEnded bool
 	}
 	waits := make(chan waitResult, len(processes))
 	for _, process := range processes {
 		go func(process *workloadProcess) {
-			waits <- waitResult{label: process.label, err: process.cmd.Wait()}
+			waitErr := process.cmd.Wait()
+			waits <- waitResult{
+				label:        process.label,
+				err:          waitErr,
+				contextEnded: ctx.Err() != nil,
+			}
 		}(process)
 	}
 
 	var result error
-	recordWait := func(waited waitResult) {
+	contextEndedBeforeAllExited := false
+	for range processes {
+		waited := <-waits
+		contextEndedBeforeAllExited = contextEndedBeforeAllExited || waited.contextEnded
 		if waited.err != nil && runCtx.Err() == nil {
 			result = errors.Join(result, fmt.Errorf("workload %s: %w", waited.label, waited.err))
 			cancel()
-		}
-	}
-	remaining := len(processes)
-	contextDone := ctx.Done()
-	contextEndedBeforeAllExited := ctx.Err() != nil
-	if contextEndedBeforeAllExited {
-		contextDone = nil
-	}
-	for remaining > 0 {
-		select {
-		case waited := <-waits:
-			remaining--
-			recordWait(waited)
-		case <-contextDone:
-			// Prefer an exit result already buffered at the deadline. If none is
-			// available, the context ended while at least one child was active.
-			select {
-			case waited := <-waits:
-				remaining--
-				recordWait(waited)
-			default:
-				contextEndedBeforeAllExited = true
-				contextDone = nil
-			}
 		}
 	}
 	for _, process := range processes {
