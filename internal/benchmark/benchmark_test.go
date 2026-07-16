@@ -455,18 +455,58 @@ func TestRunPhaseAcceptsSuccessfulExitAfterDeadline(t *testing.T) {
 	}
 }
 
-func TestFinalizeWorkloadResultPrefersSuccessfulExit(t *testing.T) {
-	if err := finalizeWorkloadResult(context.DeadlineExceeded, true, nil); err != nil {
-		t.Fatalf("successful exit inherited deadline: %v", err)
+func TestRunPhasePreservesParentCancellationAfterSuccessfulCleanup(t *testing.T) {
+	monitor := &fakeMonitor{
+		sample:  &model.PowerSample{Battery: model.BatterySample{PowerSource: "Battery Power"}},
+		session: model.Session{ID: "session"},
+		dir:     t.TempDir(),
+	}
+	started := make(chan struct{})
+	deps := testControllerDependencies(func(ctx context.Context, _ string, _ Phase, _ Options) error {
+		close(started)
+		<-ctx.Done()
+		return nil
+	})
+	controller := newController(monitor, deps)
+	phase := Phase{Name: "phase", Kind: "cpu", Duration: time.Minute}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := controller.runPhase(
+			ctx,
+			Plan{Name: "test", Phases: []Phase{phase}},
+			0,
+			phase,
+			Options{},
+		)
+		done <- err
+	}()
+	<-started
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("parent cancellation was lost: %v", err)
+	}
+}
+
+func TestFinalizeWorkloadResultDistinguishesDeadlineOrder(t *testing.T) {
+	if err := finalizeWorkloadResult(context.DeadlineExceeded, false, nil); err != nil {
+		t.Fatalf("successful exit before deadline inherited cleanup deadline: %v", err)
 	}
 
 	syncErr := errors.New("sync failed")
-	if err := finalizeWorkloadResult(context.DeadlineExceeded, true, syncErr); !errors.Is(err, syncErr) || errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("successful process with output failure returned %v", err)
+	if err := finalizeWorkloadResult(context.DeadlineExceeded, false, syncErr); !errors.Is(err, syncErr) || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("post-exit output failure returned %v", err)
+	}
+
+	if err := finalizeWorkloadResult(context.DeadlineExceeded, true, nil); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("deadline-driven graceful exit was accepted: %v", err)
 	}
 
 	exitErr := errors.New("exit status 1")
-	if err := finalizeWorkloadResult(context.DeadlineExceeded, false, exitErr); !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, exitErr) {
-		t.Fatalf("failed process lost deadline or exit error: %v", err)
+	if err := finalizeWorkloadResult(nil, false, exitErr); !errors.Is(err, exitErr) {
+		t.Fatalf("child failure was lost: %v", err)
+	}
+	if err := finalizeWorkloadResult(context.DeadlineExceeded, true, exitErr); !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, exitErr) {
+		t.Fatalf("deadline or child failure was lost: %v", err)
 	}
 }

@@ -443,15 +443,21 @@ func (c *Controller) runPhase(
 			updateProgress(time.Now())
 		case err := <-done:
 			drainPriority()
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				err = errors.Join(ctxErr, err)
+			}
 			return clonePriorityPointer(observed), err
 		case <-phaseCtx.Done():
-			// Wait for workload cleanup. runCommands owns process Wait calls and
-			// receives the same context, so this does not race with subprocess Wait.
-			// Its result decides whether the deadline interrupted a child or only
-			// raced with cleanup after every child had exited successfully.
+			// Wait for workload cleanup. runCommands records whether the phase
+			// context ended before all child Wait calls completed. This accepts
+			// natural exits that beat the deadline while preserving deadline-driven
+			// graceful exits and explicit parent cancellation.
 			select {
 			case err := <-done:
 				drainPriority()
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					err = errors.Join(ctxErr, err)
+				}
 				return clonePriorityPointer(observed), err
 			case <-time.After(workloadCleanupTimeout):
 				return clonePriorityPointer(observed), fmt.Errorf(
@@ -751,16 +757,34 @@ func runCommands(
 	}
 
 	var result error
-	allExitedSuccessfully := true
-	for range processes {
-		waited := <-waits
-		if waited.err == nil {
-			continue
-		}
-		allExitedSuccessfully = false
-		if runCtx.Err() == nil {
+	recordWait := func(waited waitResult) {
+		if waited.err != nil && runCtx.Err() == nil {
 			result = errors.Join(result, fmt.Errorf("workload %s: %w", waited.label, waited.err))
 			cancel()
+		}
+	}
+	remaining := len(processes)
+	contextDone := ctx.Done()
+	contextEndedBeforeAllExited := ctx.Err() != nil
+	if contextEndedBeforeAllExited {
+		contextDone = nil
+	}
+	for remaining > 0 {
+		select {
+		case waited := <-waits:
+			remaining--
+			recordWait(waited)
+		case <-contextDone:
+			// Prefer an exit result already buffered at the deadline. If none is
+			// available, the context ended while at least one child was active.
+			select {
+			case waited := <-waits:
+				remaining--
+				recordWait(waited)
+			default:
+				contextEndedBeforeAllExited = true
+				contextDone = nil
+			}
 		}
 	}
 	for _, process := range processes {
@@ -778,14 +802,14 @@ func runCommands(
 			result = errors.Join(result, fmt.Errorf("close %s log: %w", process.label, closeErr))
 		}
 	}
-	return finalizeWorkloadResult(ctx.Err(), allExitedSuccessfully, result)
+	return finalizeWorkloadResult(ctx.Err(), contextEndedBeforeAllExited, result)
 }
 
-func finalizeWorkloadResult(ctxErr error, allExitedSuccessfully bool, result error) error {
-	if allExitedSuccessfully {
-		return result
+func finalizeWorkloadResult(ctxErr error, contextEndedBeforeAllExited bool, result error) error {
+	if contextEndedBeforeAllExited {
+		return errors.Join(ctxErr, result)
 	}
-	return errors.Join(ctxErr, result)
+	return result
 }
 
 func capturePriorityObservation(
