@@ -36,7 +36,9 @@ Attribution is explicitly estimated, bounded, streaming, and confidence-labelled
 
 Canonical records are append-only JSONL. Session metadata and summaries use atomic JSON replacement. SQLite is an optional query mirror, not the source of truth. This allows recovery if SQLite is missing or a process is interrupted.
 
-Live publication and durable persistence are separate paths. The monitor publishes only the latest unread live frame. The store writes the first sample and cadence-due samples, retaining one deep-copied latest pending sample between durable writes. Periodic buffer flushes do not publish that pending sample. Report snapshots, shutdown, runtime-profile restarts, and benchmark phase boundaries explicitly flush it.
+Live publication and durable persistence are separate paths. The collector manager is the single owner of both live and durable deadlines, composing once when deadlines coincide. The store never calculates a second cadence; it retains one deep-copied latest pending sample between explicit durable writes. Periodic buffer flushes do not publish that pending sample. Report snapshots, shutdown, runtime-profile restarts, and benchmark phase boundaries explicitly flush it.
+
+The manager tracks requested and exponentially smoothed observed cadences for live publication, battery collection, `powermetrics`, application attribution, and durable logging. SwiftUI additionally measures successful status-poll delivery so backend and client responsiveness can be distinguished.
 
 Live-only sessions still persist session metadata, events, and benchmark results, but leave canonical power-sample and app-attribution logs empty.
 
@@ -45,3 +47,11 @@ Live-only sessions still persist session metadata, events, and benchmark results
 The effective `macpowerlab.runtime_settings.v1` document is embedded in every new monitoring session. CLI monitoring commands load `<data-dir>/runtime-settings.json` before applying explicit flags. The SwiftUI app reads and updates the same settings through authenticated loopback endpoints.
 
 The server serializes monitor, benchmark, and settings transitions. It rejects settings changes during an active benchmark. A settings change while monitoring flushes and closes the old session, starts a new monitor with the requested configuration, atomically persists the settings, and publishes the new monitor. A failed start or persistence attempt makes a best-effort rollback to the previous configuration in another fresh session; samples from different effective configurations are never appended to one session.
+
+## Benchmark priority evidence
+
+Benchmark phases record an additive priority observation while workload processes are alive. Each final `test_run` stores the requested and observed backend nice value plus the PID, label, and observed nice value of every workload process. Reports surface this evidence so benchmark neutrality can be verified without manually catching short-lived processes with `ps`.
+
+## Sanitized support archives
+
+All archives use a deny policy before file contents are opened. Local API token files, token-address files, launcher commands, transient SQLite sidecars, Finder metadata, and private-key formats are omitted and listed by reason in the archive manifest. `macpowerlab support pack` packages the application data directory to an output outside that directory.

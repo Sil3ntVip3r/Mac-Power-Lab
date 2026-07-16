@@ -58,10 +58,12 @@ type Monitor interface {
 }
 
 // Controller runs one plan at a time and publishes progress.
+type priorityReporter func(model.BenchmarkPriorityObservation)
+
 type controllerDependencies struct {
 	buildNative    func(context.Context, string, string) error
 	acquireLock    func(string) (func(), error)
-	runWorkload    func(context.Context, string, Phase, Options) error
+	runWorkload    func(context.Context, string, Phase, Options, priorityReporter) error
 	startSleepLock func(context.Context) (func(), error)
 	now            func() time.Time
 }
@@ -191,10 +193,12 @@ func (c *Controller) Run(ctx context.Context, plan Plan, opts Options) (runErr e
 		Status:     "preparing",
 	})
 	defer func() {
+		last := c.Progress()
 		progress := model.BenchmarkProgress{
-			Running: false,
-			Plan:    plan.Name,
-			Status:  "complete",
+			Running:  false,
+			Plan:     plan.Name,
+			Status:   "complete",
+			Priority: clonePriorityPointer(last.Priority),
 		}
 		switch {
 		case runErr == nil:
@@ -281,7 +285,8 @@ func (c *Controller) Run(ctx context.Context, plan Plan, opts Options) (runErr e
 			return fmt.Errorf("record benchmark phase start: %w", err)
 		}
 		c.manager.SetPhase(phase.Name)
-		phaseErr := c.runPhase(ctx, plan, index, phase, opts)
+		priorityObservation, phaseErr := c.runPhase(ctx, plan, index, phase, opts)
+		testRun.Priority = priorityObservation
 		if flushErr := c.manager.FlushPending(); flushErr != nil {
 			phaseErr = errors.Join(
 				phaseErr,
@@ -341,11 +346,11 @@ func (c *Controller) runPhase(
 	index int,
 	phase Phase,
 	opts Options,
-) error {
+) (*model.BenchmarkPriorityObservation, error) {
 	phaseCtx, cancel := context.WithTimeout(ctx, phase.Duration+30*time.Second)
 	defer cancel()
 	started := c.deps.now()
-	c.set(model.BenchmarkProgress{
+	baseProgress := model.BenchmarkProgress{
 		Running:       true,
 		Plan:          plan.Name,
 		Phase:         phase.Name,
@@ -354,49 +359,102 @@ func (c *Controller) runPhase(
 		PhaseStarted:  started,
 		PhaseDuration: phase.Duration.Seconds(),
 		Status:        "running",
-	})
+	}
+	c.set(baseProgress)
 
 	done := make(chan error, 1)
+	priorityUpdates := make(chan model.BenchmarkPriorityObservation, 1)
+	reportPriority := func(value model.BenchmarkPriorityObservation) {
+		select {
+		case priorityUpdates <- clonePriorityObservation(value):
+		default:
+			select {
+			case <-priorityUpdates:
+			default:
+			}
+			select {
+			case priorityUpdates <- clonePriorityObservation(value):
+			default:
+			}
+		}
+	}
 	go func() {
-		done <- c.deps.runWorkload(phaseCtx, c.manager.SessionDir(), phase, opts)
+		done <- c.deps.runWorkload(
+			phaseCtx,
+			c.manager.SessionDir(),
+			phase,
+			opts,
+			reportPriority,
+		)
 	}()
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
+	var observed *model.BenchmarkPriorityObservation
+	updateProgress := func(now time.Time) {
+		elapsed := now.Sub(started).Seconds()
+		remaining := mathMax(0, phase.Duration.Seconds()-elapsed)
+		percent := mathMin(100, elapsed/phase.Duration.Seconds()*100)
+		progress := baseProgress
+		progress.Elapsed = elapsed
+		progress.Remaining = remaining
+		progress.Percent = percent
+		progress.Priority = clonePriorityPointer(observed)
+		c.set(progress)
+	}
+	drainPriority := func() {
+		for {
+			select {
+			case value := <-priorityUpdates:
+				copyValue := clonePriorityObservation(value)
+				observed = &copyValue
+			default:
+				return
+			}
+		}
+	}
 	for {
 		select {
+		case value := <-priorityUpdates:
+			copyValue := clonePriorityObservation(value)
+			observed = &copyValue
+			updateProgress(time.Now())
 		case err := <-done:
-			return err
+			drainPriority()
+			return clonePriorityPointer(observed), err
 		case <-phaseCtx.Done():
 			// Wait for workload cleanup. runCommands owns process Wait calls and
 			// receives the same context, so this does not race with subprocess Wait.
 			select {
 			case err := <-done:
+				drainPriority()
 				if phaseCtx.Err() != nil {
-					return errors.Join(phaseCtx.Err(), err)
+					return clonePriorityPointer(observed), errors.Join(phaseCtx.Err(), err)
 				}
-				return err
+				return clonePriorityPointer(observed), err
 			case <-time.After(10 * time.Second):
-				return fmt.Errorf("workload cleanup timed out: %w", phaseCtx.Err())
+				return clonePriorityPointer(observed), fmt.Errorf(
+					"workload cleanup timed out: %w",
+					phaseCtx.Err(),
+				)
 			}
 		case now := <-ticker.C:
-			elapsed := now.Sub(started).Seconds()
-			remaining := mathMax(0, phase.Duration.Seconds()-elapsed)
-			percent := mathMin(100, elapsed/phase.Duration.Seconds()*100)
-			c.set(model.BenchmarkProgress{
-				Running:       true,
-				Plan:          plan.Name,
-				Phase:         phase.Name,
-				PhaseIndex:    index + 1,
-				PhaseCount:    len(plan.Phases),
-				PhaseStarted:  started,
-				PhaseDuration: phase.Duration.Seconds(),
-				Elapsed:       elapsed,
-				Remaining:     remaining,
-				Percent:       percent,
-				Status:        "running",
-			})
+			updateProgress(now)
 		}
 	}
+}
+
+func clonePriorityObservation(value model.BenchmarkPriorityObservation) model.BenchmarkPriorityObservation {
+	value.Workloads = append([]model.ProcessPriorityObservation(nil), value.Workloads...)
+	value.Errors = append([]string(nil), value.Errors...)
+	return value
+}
+
+func clonePriorityPointer(value *model.BenchmarkPriorityObservation) *model.BenchmarkPriorityObservation {
+	if value == nil {
+		return nil
+	}
+	copyValue := clonePriorityObservation(*value)
+	return &copyValue
 }
 
 func validatePhase(p Phase) error {
@@ -440,8 +498,17 @@ func validatePhase(p Phase) error {
 	return nil
 }
 
-func runWorkload(ctx context.Context, sessionDir string, phase Phase, opts Options) error {
+func runWorkload(
+	ctx context.Context,
+	sessionDir string,
+	phase Phase,
+	opts Options,
+	reportPriority priorityReporter,
+) error {
 	if phase.Kind == "idle" {
+		if reportPriority != nil {
+			reportPriority(capturePriorityObservation(opts.ProcessNice, nil))
+		}
 		timer := time.NewTimer(phase.Duration)
 		defer timer.Stop()
 		select {
@@ -455,7 +522,15 @@ func runWorkload(ctx context.Context, sessionDir string, phase Phase, opts Optio
 	if err != nil {
 		return err
 	}
-	return runCommands(ctx, sessionDir, phase.RunID, phase.Name, commands, opts.ProcessNice)
+	return runCommands(
+		ctx,
+		sessionDir,
+		phase.RunID,
+		phase.Name,
+		commands,
+		opts.ProcessNice,
+		reportPriority,
+	)
 }
 
 func workloadCommands(phase Phase, opts Options) ([][]string, error) {
@@ -554,6 +629,7 @@ func runCommands(
 	sessionDir, runID, name string,
 	commands [][]string,
 	processNice int,
+	reportPriority priorityReporter,
 ) error {
 	if len(commands) == 0 {
 		return errors.New("no workload commands")
@@ -637,6 +713,9 @@ func runCommands(
 		}()
 		processes = append(processes, process)
 	}
+	if reportPriority != nil {
+		reportPriority(capturePriorityObservation(processNice, processes))
+	}
 
 	type waitResult struct {
 		label string
@@ -676,6 +755,50 @@ func runCommands(
 		return errors.Join(ctx.Err(), result)
 	}
 	return result
+}
+
+func capturePriorityObservation(
+	configuredNice int,
+	processes []*workloadProcess,
+) model.BenchmarkPriorityObservation {
+	observation := model.BenchmarkPriorityObservation{
+		CapturedAt:            time.Now().UTC(),
+		Supported:             runtime.GOOS == "darwin",
+		RequestedBackendNice:  configuredNice,
+		RequestedWorkloadNice: 0,
+	}
+	backendNice, err := priority.Current()
+	if err != nil {
+		observation.Errors = append(
+			observation.Errors,
+			"read backend nice: "+err.Error(),
+		)
+	} else {
+		observation.ObservedBackendNice = backendNice
+	}
+	for _, process := range processes {
+		if process == nil || process.cmd == nil || process.cmd.Process == nil {
+			continue
+		}
+		pid := process.cmd.Process.Pid
+		niceValue, err := priority.ForPID(pid)
+		if err != nil {
+			observation.Errors = append(
+				observation.Errors,
+				fmt.Sprintf("read %s PID %d nice: %v", process.label, pid, err),
+			)
+			continue
+		}
+		observation.Workloads = append(
+			observation.Workloads,
+			model.ProcessPriorityObservation{
+				PID:   pid,
+				Label: process.label,
+				Nice:  niceValue,
+			},
+		)
+	}
+	return observation
 }
 
 // BuildNative compiles deterministic CPU/memory/Metal workloads on macOS.

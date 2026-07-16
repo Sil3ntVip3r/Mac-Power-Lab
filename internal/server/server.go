@@ -42,6 +42,7 @@ type monitor interface {
 	Stop(context.Context) error
 	FlushPending() error
 	Snapshot() (store.SessionSnapshot, error)
+	CadenceDiagnostics() model.CadenceDiagnostics
 }
 
 type benchmarkRunner interface {
@@ -548,6 +549,8 @@ func (e *Engine) Status() model.Status {
 		session := manager.Session()
 		status.Session = &session
 		status.LastSample = manager.LastSample()
+		cadence := manager.CadenceDiagnostics()
+		status.Cadence = &cadence
 	}
 	if controller != nil {
 		status.Benchmark = controller.Progress()

@@ -2,6 +2,8 @@ package main
 
 import (
 	"flag"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/Sil3ntVip3r/Mac-Power-Lab/internal/config"
@@ -155,5 +157,30 @@ func TestLoadRuntimeConfigUsesSelectedDataDirectory(t *testing.T) {
 	}
 	if cfg.DataDir != dataDir || !config.RuntimeSettingsEqual(cfg.Runtime, want) {
 		t.Fatalf("loaded config=%+v want dataDir=%q settings=%+v", cfg, dataDir, want)
+	}
+}
+
+func TestSupportPackCreatesSanitizedArchive(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dataDir, "api.token"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, "runtime-settings.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(t.TempDir(), "support.tar.gz")
+	if err := runSupport([]string{
+		"pack",
+		"--data-dir", dataDir,
+		"--output", output,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() == 0 {
+		t.Fatal("support archive is empty")
 	}
 }

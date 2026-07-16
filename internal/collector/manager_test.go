@@ -177,8 +177,12 @@ func TestBuildSessionRecordsEffectiveRuntimeSettings(t *testing.T) {
 func TestPublishLatestSampleReplacesUnreadValue(t *testing.T) {
 	ctx := context.Background()
 	out := make(chan model.PowerSample, 1)
-	publishLatestSample(ctx, out, model.PowerSample{Sequence: 1})
-	publishLatestSample(ctx, out, model.PowerSample{Sequence: 2})
+	if replaced := publishLatestSample(ctx, out, model.PowerSample{Sequence: 1}); replaced {
+		t.Fatal("first frame unexpectedly replaced another frame")
+	}
+	if replaced := publishLatestSample(ctx, out, model.PowerSample{Sequence: 2}); !replaced {
+		t.Fatal("second frame should replace the unread first frame")
+	}
 	select {
 	case sample := <-out:
 		if sample.Sequence != 2 {

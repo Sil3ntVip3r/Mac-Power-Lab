@@ -12,6 +12,152 @@
   "properties": {
     "schema": {
       "const": "macpowerlab.status.v1"
+    },
+    "cadence": {
+      "type": "object",
+      "required": [
+        "ui_refresh",
+        "battery_collection",
+        "powermetrics",
+        "app_attribution",
+        "durable_logging"
+      ],
+      "properties": {
+        "ui_refresh": {
+          "type": "object",
+          "required": [
+            "requested_ms"
+          ],
+          "properties": {
+            "requested_ms": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "observed_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "observations": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "last_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "additionalProperties": false
+        },
+        "battery_collection": {
+          "type": "object",
+          "required": [
+            "requested_ms"
+          ],
+          "properties": {
+            "requested_ms": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "observed_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "observations": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "last_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "additionalProperties": false
+        },
+        "powermetrics": {
+          "type": "object",
+          "required": [
+            "requested_ms"
+          ],
+          "properties": {
+            "requested_ms": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "observed_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "observations": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "last_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "additionalProperties": false
+        },
+        "app_attribution": {
+          "type": "object",
+          "required": [
+            "requested_ms"
+          ],
+          "properties": {
+            "requested_ms": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "observed_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "observations": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "last_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "additionalProperties": false
+        },
+        "durable_logging": {
+          "type": "object",
+          "required": [
+            "requested_ms"
+          ],
+          "properties": {
+            "requested_ms": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "observed_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "observations": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "last_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "additionalProperties": false
+        },
+        "live_publications": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "replaced_stream_frames": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": true
