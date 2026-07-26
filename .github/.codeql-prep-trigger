@@ -1,1 +1,1 @@
-Trigger the registered CodeQL workflow against the current PR branch.
+Synchronize PR #16 with the trusted preparation workflow.
