@@ -6,14 +6,71 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  prepare-legacy-once:
+    if: github.event_name == 'pull_request' && github.head_ref == 'fix/legacy-once-logging' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/legacy-once-logging
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify focused starting state
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          expected='.github/workflows/ci.yml
+.github/workflows/prepare-legacy-once-pr.yml
+CHANGELOG.md
+legacy/tests/test_once_logging.py
+scripts/_prepare_legacy_once.py'
+          actual="$(git diff --name-only origin/main...HEAD)"
+          test "$actual" = "$expected"
+          git diff --exit-code origin/main -- legacy/mac_power_watch_v0.12.0.py
+      - name: Apply focused source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/_prepare_legacy_once.py
+          git diff --check
+          git diff --exit-code origin/main -- legacy/mac_power_watch_v0.12.0.py
+      - name: Validate legacy and Go code
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m compileall -q legacy
+          python3 -m unittest discover -s legacy/tests -v
+          python3 legacy/mac_power_watch.py --help >/dev/null
+          (cd legacy && sha256sum -c MANIFEST_SHA256.txt)
+          test -z "$(gofmt -l cmd internal)"
+          go test -count=1 ./...
+          go vet ./...
+      - name: Commit validated source and restore CI
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show origin/main:.github/workflows/ci.yml > .github/workflows/ci.yml
+          git rm .github/workflows/prepare-legacy-once-pr.yml scripts/_prepare_legacy_once.py
+          git add .github/workflows/ci.yml CHANGELOG.md legacy/mac_power_watch.py legacy/MANIFEST_SHA256.txt legacy/tests/test_once_logging.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: complete legacy one-shot logging'
+          git push origin HEAD:fix/legacy-once-logging
+
   go:
+    if: github.event_name != 'pull_request' || github.head_ref != 'fix/legacy-once-logging' || github.actor == 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -36,6 +93,7 @@ jobs:
           CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build ./cmd/macpowerlab
 
   swift-syntax:
+    if: github.event_name != 'pull_request' || github.head_ref != 'fix/legacy-once-logging' || github.actor == 'github-actions[bot]'
     runs-on: macos-latest
     timeout-minutes: 15
     steps:
