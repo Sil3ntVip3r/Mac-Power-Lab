@@ -1,0 +1,87 @@
+name: Prepare PR 16 Review
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prepare-pr16-review
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    if: >-
+      github.event.pull_request.number == 16 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/legacy-once-logging' &&
+      github.event.review.user.login == 'chatgpt-codex-connector[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 683cf03438f8f4e3e0a9cc1083b8c2ad4f7ce8f5
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify exact branch scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '683cf03438f8f4e3e0a9cc1083b8c2ad4f7ce8f5'
+          git fetch origin main fix/legacy-once-logging
+          test "$(git rev-parse origin/fix/legacy-once-logging)" = '683cf03438f8f4e3e0a9cc1083b8c2ad4f7ce8f5'
+          expected='.github/.codeql-prep-trigger
+.github/workflows/ci.yml
+.github/workflows/codeql.yml
+.github/workflows/prepare-legacy-once-pr.yml
+CHANGELOG.md
+legacy/tests/test_once_logging.py
+scripts/_prepare_legacy_once.py'
+          actual="$(git diff --name-only 95090fb542fc91f8542ddfd90f9c16bbccaa17f5...HEAD)"
+          test "$actual" = "$expected"
+          git diff --exit-code 95090fb542fc91f8542ddfd90f9c16bbccaa17f5 -- legacy/mac_power_watch_v0.12.0.py
+      - name: Apply focused implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/_prepare_legacy_once.py
+          git diff --check
+          git diff --exit-code 95090fb542fc91f8542ddfd90f9c16bbccaa17f5 -- legacy/mac_power_watch_v0.12.0.py
+      - name: Validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m compileall -q legacy
+          python3 -m unittest discover -s legacy/tests -v
+          python3 legacy/mac_power_watch.py --help >/dev/null
+          (cd legacy && sha256sum -c MANIFEST_SHA256.txt)
+          test -z "$(gofmt -l cmd internal)"
+          go test -count=1 ./...
+          go vet ./...
+      - name: Publish validated source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show origin/main:.github/workflows/ci.yml > .github/workflows/ci.yml
+          git show origin/main:.github/workflows/codeql.yml > .github/workflows/codeql.yml
+          git rm \
+            .github/.codeql-prep-trigger \
+            .github/workflows/prepare-legacy-once-pr.yml \
+            scripts/_prepare_legacy_once.py
+          git add \
+            .github/workflows/ci.yml \
+            .github/workflows/codeql.yml \
+            CHANGELOG.md \
+            legacy/mac_power_watch.py \
+            legacy/MANIFEST_SHA256.txt \
+            legacy/tests/test_once_logging.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: complete legacy one-shot logging'
+          git push origin HEAD:fix/legacy-once-logging
