@@ -746,18 +746,20 @@ func runCommands(
 	}
 
 	type waitResult struct {
-		label        string
-		err          error
-		contextEnded bool
+		label           string
+		err             error
+		contextEnded    bool
+		runContextEnded bool
 	}
 	waits := make(chan waitResult, len(processes))
 	for _, process := range processes {
 		go func(process *workloadProcess) {
 			waitErr := process.cmd.Wait()
 			waits <- waitResult{
-				label:        process.label,
-				err:          waitErr,
-				contextEnded: ctx.Err() != nil,
+				label:           process.label,
+				err:             waitErr,
+				contextEnded:    ctx.Err() != nil,
+				runContextEnded: runCtx.Err() != nil,
 			}
 		}(process)
 	}
@@ -767,7 +769,7 @@ func runCommands(
 	for range processes {
 		waited := <-waits
 		contextEndedBeforeAllExited = contextEndedBeforeAllExited || waited.contextEnded
-		if waited.err != nil && runCtx.Err() == nil {
+		if shouldRecordWorkloadWait(waited.err, waited.runContextEnded) {
 			result = errors.Join(result, fmt.Errorf("workload %s: %w", waited.label, waited.err))
 			cancel()
 		}
@@ -788,6 +790,10 @@ func runCommands(
 		}
 	}
 	return finalizeWorkloadResult(ctx.Err(), contextEndedBeforeAllExited, result)
+}
+
+func shouldRecordWorkloadWait(waitErr error, runContextEnded bool) bool {
+	return waitErr != nil && !runContextEnded
 }
 
 func finalizeWorkloadResult(ctxErr error, contextEndedBeforeAllExited bool, result error) error {

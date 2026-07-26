@@ -490,6 +490,19 @@ func TestRunPhasePreservesParentCancellationAfterSuccessfulCleanup(t *testing.T)
 	}
 }
 
+func TestShouldRecordWorkloadWaitUsesExitSnapshot(t *testing.T) {
+	exitErr := errors.New("exit status 7")
+	if !shouldRecordWorkloadWait(exitErr, false) {
+		t.Fatal("natural child failure was suppressed")
+	}
+	if shouldRecordWorkloadWait(exitErr, true) {
+		t.Fatal("cancellation-driven child exit was recorded as a natural failure")
+	}
+	if shouldRecordWorkloadWait(nil, false) {
+		t.Fatal("successful child exit was recorded as a failure")
+	}
+}
+
 func TestRunCommandsPreservesDeadlineForGracefulExit(t *testing.T) {
 	const helperEnvironment = "MACPOWERLAB_GRACEFUL_WORKLOAD_HELPER"
 	if os.Getenv(helperEnvironment) == "1" {
