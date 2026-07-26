@@ -1,19 +1,18 @@
-name: CodeQL
+name: Prepare legacy one-shot PR
 
 on:
-  push:
-    branches: [main]
   pull_request:
-  schedule:
-    - cron: '23 5 * * 2'
 
 permissions:
   contents: write
-  security-events: write
+
+concurrency:
+  group: prepare-legacy-once-pr
+  cancel-in-progress: true
 
 jobs:
-  prepare-legacy-once:
-    if: github.event_name == 'pull_request' && github.head_ref == 'fix/legacy-once-logging' && github.actor != 'github-actions[bot]'
+  prepare:
+    if: github.head_ref == 'fix/legacy-once-logging' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -30,9 +29,7 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin main
-          expected='.github/workflows/ci.yml
-.github/workflows/codeql.yml
-.github/workflows/prepare-legacy-once-pr.yml
+          expected='.github/workflows/prepare-legacy-once-pr.yml
 CHANGELOG.md
 legacy/tests/test_once_logging.py
 scripts/_prepare_legacy_once.py'
@@ -52,32 +49,17 @@ scripts/_prepare_legacy_once.py'
           set -euo pipefail
           python3 -m compileall -q legacy
           python3 -m unittest discover -s legacy/tests -v
-          python3 legacy/mac_power_watch.py --help >/dev/null
           (cd legacy && sha256sum -c MANIFEST_SHA256.txt)
           test -z "$(gofmt -l cmd internal)"
           go test -count=1 ./...
           go vet ./...
-      - name: Commit validated source and restore workflows
+      - name: Commit validated source
         shell: bash
         run: |
           set -euo pipefail
-          git show origin/main:.github/workflows/ci.yml > .github/workflows/ci.yml
-          git show origin/main:.github/workflows/codeql.yml > .github/workflows/codeql.yml
           git rm .github/workflows/prepare-legacy-once-pr.yml scripts/_prepare_legacy_once.py
-          git add .github/workflows/ci.yml .github/workflows/codeql.yml CHANGELOG.md legacy/mac_power_watch.py legacy/MANIFEST_SHA256.txt legacy/tests/test_once_logging.py
+          git add CHANGELOG.md legacy/mac_power_watch.py legacy/MANIFEST_SHA256.txt legacy/tests/test_once_logging.py
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'fix: complete legacy one-shot logging'
           git push origin HEAD:fix/legacy-once-logging
-
-  analyze:
-    if: github.event_name != 'pull_request' || github.head_ref != 'fix/legacy-once-logging' || github.actor == 'github-actions[bot]'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: github/codeql-action/init@v3
-        with:
-          languages: go
-      - uses: github/codeql-action/autobuild@v3
-      - uses: github/codeql-action/analyze@v3

@@ -4,6 +4,9 @@ All notable changes to Mac Power Lab are documented here. Detailed historical no
 
 ## [Unreleased]
 
+### Fixed
+- Made legacy `--once --log FILE` write one complete CSV sample and collect requested `powermetrics` synchronously before the reading.
+
 ## [1.5.0] - 2026-07-16
 
 ### Added
