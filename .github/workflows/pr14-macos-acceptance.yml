@@ -13,12 +13,13 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
-      - name: Prepare project security attributes
+        with:
+          show-progress: false
+      - name: Prepare executable permissions
         shell: zsh
         run: |
           set -euo pipefail
           chmod +x *.sh scripts/*.sh
-          ./scripts/prepare_macos_security.sh
       - name: Build Go backend
         shell: zsh
         run: |
