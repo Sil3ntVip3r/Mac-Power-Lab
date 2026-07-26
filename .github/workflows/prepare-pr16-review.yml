@@ -1,4 +1,4 @@
-name: Prepare PR 16 Review
+name: Prepare Legacy One-shot Review
 
 on:
   pull_request_review:
@@ -9,24 +9,23 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: prepare-pr16-review
+  group: prepare-legacy-once-review
   cancel-in-progress: true
 
 jobs:
   prepare:
     if: >-
-      github.event.pull_request.number == 16 &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.head.ref == 'fix/legacy-once-logging' &&
-      (github.event.review.user.login == 'chatgpt-codex-connector' ||
-       github.event.review.user.login == 'Sil3ntVip3r')
+      github.event.review.user.login == 'chatgpt-codex-connector'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Report start
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh pr comment 16 --repo "$GITHUB_REPOSITORY" --body "Trusted PR #16 preparation started for reviewed head 428d04c5065c07186ab4482259ca1d6833d21c9f."
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Trusted legacy one-shot preparation started for reviewed head 428d04c5065c07186ab4482259ca1d6833d21c9f."
       - uses: actions/checkout@v4
         with:
           ref: 428d04c5065c07186ab4482259ca1d6833d21c9f
@@ -95,4 +94,5 @@ scripts/_prepare_legacy_once.py'
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh pr comment 16 --repo "$GITHUB_REPOSITORY" --body "Trusted PR #16 preparation completed with status: ${{ job.status }}."
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Trusted legacy one-shot preparation completed with status: ${{ job.status }}."
