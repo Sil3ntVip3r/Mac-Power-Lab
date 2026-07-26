@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 683cf03438f8f4e3e0a9cc1083b8c2ad4f7ce8f5
+          ref: 428d04c5065c07186ab4482259ca1d6833d21c9f
           fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
@@ -33,9 +33,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = '683cf03438f8f4e3e0a9cc1083b8c2ad4f7ce8f5'
+          test "$(git rev-parse HEAD)" = '428d04c5065c07186ab4482259ca1d6833d21c9f'
           git fetch origin main fix/legacy-once-logging
-          test "$(git rev-parse origin/fix/legacy-once-logging)" = '683cf03438f8f4e3e0a9cc1083b8c2ad4f7ce8f5'
+          test "$(git rev-parse origin/fix/legacy-once-logging)" = '428d04c5065c07186ab4482259ca1d6833d21c9f'
           expected='.github/.codeql-prep-trigger
 .github/workflows/ci.yml
 .github/workflows/codeql.yml
