@@ -15,6 +15,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           show-progress: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
       - name: Prepare executable permissions
         shell: /bin/zsh {0}
         run: |
