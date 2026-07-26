@@ -1,0 +1,108 @@
+name: PR 14 macOS Acceptance
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    if: github.head_ref == 'agent/fix-benchmark-manifest-v1.5.0'
+    runs-on: macos-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bootstrap signed app bundle
+        shell: zsh
+        run: |
+          set -euo pipefail
+          chmod +x *.sh scripts/*.sh
+          ./scripts/bootstrap_macos.sh
+      - name: Verify versioned app bundle
+        shell: zsh
+        run: |
+          set -euo pipefail
+          ./bin/macpowerlab version | tee /tmp/macpowerlab-version.txt
+          grep -F 'MacPowerLab v1.5.0' /tmp/macpowerlab-version.txt
+          test "$(plutil -extract CFBundleShortVersionString raw dist/MacPowerLab.app/Contents/Info.plist)" = '1.5.0'
+          test "$(plutil -extract CFBundleVersion raw dist/MacPowerLab.app/Contents/Info.plist)" = '150'
+          codesign --verify --deep --strict --verbose=2 dist/MacPowerLab.app
+      - name: Run native workloads
+        shell: zsh
+        run: |
+          set -euo pipefail
+          ./bin/native/cpu_stress 2
+          ./bin/native/memory_stress 2 64
+      - name: Run representative benchmark and inspect archive
+        shell: zsh
+        run: |
+          set -euo pipefail
+          sudo -n -v
+          export DATA_DIR="$RUNNER_TEMP/macpowerlab-acceptance"
+          mkdir -p "$DATA_DIR"
+          STARTED_AT="$(date -u +%s)"
+          ./bin/macpowerlab benchmark custom \
+            --name 'PR 14 acceptance' \
+            --cpu \
+            --duration 2s \
+            --power-source any \
+            --data-dir "$DATA_DIR" \
+            --apps=false \
+            --sqlite=false \
+            --no-color=true \
+            --pack=true \
+            </dev/null | tee /tmp/macpowerlab-benchmark.log
+          export STARTED_AT
+          python3 - <<'PY'
+          import datetime as dt
+          import gzip
+          import json
+          import os
+          import struct
+          import tarfile
+          from pathlib import Path
+
+          data = Path(os.environ['DATA_DIR'])
+          sessions = sorted(data.rglob('session.json'))
+          if not sessions:
+              raise SystemExit('benchmark session.json was not created')
+          session = json.loads(sessions[-1].read_text())
+          if session.get('version') != '1.5.0':
+              raise SystemExit(f"session version={session.get('version')!r}, expected '1.5.0'")
+
+          test_runs = sorted(data.rglob('tests.jsonl'))
+          if not test_runs:
+              raise SystemExit('benchmark tests.jsonl was not created')
+          records = [json.loads(line) for line in test_runs[-1].read_text().splitlines() if line.strip()]
+          if not records or any(record.get('status') != 'completed' for record in records):
+              raise SystemExit(f'benchmark did not complete cleanly: {records!r}')
+
+          archives = sorted(data.rglob('*.tar.gz'), key=lambda path: path.stat().st_mtime)
+          if not archives:
+              raise SystemExit('benchmark archive was not created')
+          archive = archives[-1]
+          raw = archive.read_bytes()
+          if len(raw) < 10 or raw[:2] != b'\x1f\x8b':
+              raise SystemExit('archive is not gzip')
+          if struct.unpack('<I', raw[4:8])[0] != 0:
+              raise SystemExit('gzip header timestamp is not normalized')
+
+          with tarfile.open(archive, 'r:gz') as bundle:
+              members = bundle.getmembers()
+              if not members:
+                  raise SystemExit('archive contains no members')
+              nonzero = [member.name for member in members if member.mtime != 0]
+              if nonzero:
+                  raise SystemExit(f'tar timestamps are not normalized: {nonzero!r}')
+              manifest_member = bundle.getmember('MANIFEST_macpowerlab.json')
+              manifest = json.load(bundle.extractfile(manifest_member))
+
+          created = dt.datetime.fromisoformat(manifest['created_at'].replace('Z', '+00:00')).timestamp()
+          started = int(os.environ['STARTED_AT'])
+          now = dt.datetime.now(dt.timezone.utc).timestamp()
+          if created < started or created > now + 5:
+              raise SystemExit(f"manifest created_at={manifest['created_at']} outside [{started}, {now}]")
+          print(f'Validated session {sessions[-1]}')
+          print(f'Validated archive {archive}')
+          PY
