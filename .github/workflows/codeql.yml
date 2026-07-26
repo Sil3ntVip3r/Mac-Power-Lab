@@ -6,6 +6,8 @@ on:
   pull_request:
   pull_request_target:
     types: [reopened, synchronize, ready_for_review]
+  issue_comment:
+    types: [created]
   schedule:
     - cron: '23 5 * * 2'
 
@@ -16,10 +18,15 @@ permissions:
 jobs:
   prepare-pr16:
     if: >-
-      github.event_name == 'pull_request_target' &&
-      github.event.pull_request.number == 16 &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref == 'fix/legacy-once-logging'
+      (github.event_name == 'pull_request_target' &&
+       github.event.pull_request.number == 16 &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'fix/legacy-once-logging') ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.number == 16 &&
+       github.event.issue.pull_request &&
+       github.event.comment.user.login == 'Sil3ntVip3r' &&
+       github.event.comment.body == '/prepare-pr16')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -93,7 +100,7 @@ scripts/_prepare_legacy_once.py'
           git push origin HEAD:fix/legacy-once-logging
 
   analyze:
-    if: github.event_name != 'pull_request_target'
+    if: github.event_name != 'pull_request_target' && github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
