@@ -23,23 +23,23 @@ jobs:
       - name: Build Go backend
         shell: /bin/zsh {0}
         run: |
-          set -euo pipefail
-          ./scripts/build_macos.sh
+          set -o pipefail
+          ./scripts/build_macos.sh 2>&1 | tee /tmp/macpowerlab-build.log
       - name: Run project tests
         shell: /bin/zsh {0}
         run: |
-          set -euo pipefail
-          ./scripts/run_tests.sh
+          set -o pipefail
+          ./scripts/run_tests.sh 2>&1 | tee /tmp/macpowerlab-tests.log
       - name: Build native benchmark workloads
         shell: /bin/zsh {0}
         run: |
-          set -euo pipefail
-          ./scripts/build_native.sh
+          set -o pipefail
+          ./scripts/build_native.sh 2>&1 | tee /tmp/macpowerlab-native-build.log
       - name: Build and sign SwiftUI app bundle
         shell: /bin/zsh {0}
         run: |
-          set -euo pipefail
-          ./scripts/build_swiftui_app.sh
+          set -o pipefail
+          ./scripts/build_swiftui_app.sh 2>&1 | tee /tmp/macpowerlab-app-build.log
       - name: Verify versioned app bundle
         shell: /bin/zsh {0}
         run: |
@@ -52,9 +52,9 @@ jobs:
       - name: Run native workloads
         shell: /bin/zsh {0}
         run: |
-          set -euo pipefail
-          ./bin/native/cpu_stress 2
-          ./bin/native/memory_stress 2 64
+          set -o pipefail
+          ./bin/native/cpu_stress 2 2>&1 | tee /tmp/macpowerlab-cpu-workload.log
+          ./bin/native/memory_stress 2 64 2>&1 | tee /tmp/macpowerlab-memory-workload.log
       - name: Run representative benchmark and inspect archive
         shell: /bin/zsh {0}
         run: |
@@ -73,9 +73,9 @@ jobs:
             --sqlite=false \
             --no-color=true \
             --pack=true \
-            </dev/null | tee /tmp/macpowerlab-benchmark.log
+            </dev/null 2>&1 | tee /tmp/macpowerlab-benchmark.log
           export STARTED_AT
-          python3 - <<'PY'
+          python3 - <<'PY' 2>&1 | tee /tmp/macpowerlab-archive-check.log
           import datetime as dt
           import json
           import os
@@ -126,3 +126,12 @@ jobs:
           print(f'Validated session {sessions[-1]}')
           print(f'Validated archive {archive}')
           PY
+      - name: Upload acceptance diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr14-macos-acceptance-logs
+          path: |
+            /tmp/macpowerlab-*.log
+            /tmp/macpowerlab-version.txt
+          if-no-files-found: warn
