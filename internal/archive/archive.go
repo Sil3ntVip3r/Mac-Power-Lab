@@ -1,4 +1,4 @@
-// Package archive creates deterministic, maximum-compression log bundles.
+// Package archive creates maximum-compression log bundles with deterministic member metadata.
 package archive
 
 import (
@@ -37,10 +37,15 @@ type Manifest struct {
 	Excluded  []ExcludedEntry `json:"excluded,omitempty"`
 }
 
-// Create writes a reproducible tar.gz with BestCompression and a SHA-256
-// manifest. Symlinks are rejected rather than followed so a session cannot
-// accidentally archive files outside its root.
-func Create(root, out string) (retErr error) {
+// Create writes a tar.gz with BestCompression, deterministic member metadata,
+// and a SHA-256 manifest that records the actual bundle creation time. Symlinks
+// are rejected rather than followed so a session cannot accidentally archive
+// files outside its root.
+func Create(root, out string) error {
+	return create(root, out, time.Now().UTC())
+}
+
+func create(root, out string, createdAt time.Time) (retErr error) {
 	if strings.TrimSpace(root) == "" || strings.TrimSpace(out) == "" {
 		return errors.New("archive root and output path are required")
 	}
@@ -96,7 +101,7 @@ func Create(root, out string) (retErr error) {
 	tarWriter := tar.NewWriter(gzipWriter)
 
 	manifest := Manifest{
-		CreatedAt: reproducibleTime,
+		CreatedAt: createdAt.UTC(),
 		Root:      filepath.Base(root),
 		Files:     make([]Entry, 0, len(paths)),
 		Excluded:  excluded,
