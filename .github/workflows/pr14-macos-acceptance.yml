@@ -13,12 +13,32 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
-      - name: Bootstrap signed app bundle
+      - name: Prepare project security attributes
         shell: zsh
         run: |
           set -euo pipefail
           chmod +x *.sh scripts/*.sh
-          ./scripts/bootstrap_macos.sh
+          ./scripts/prepare_macos_security.sh
+      - name: Build Go backend
+        shell: zsh
+        run: |
+          set -euo pipefail
+          ./scripts/build_macos.sh
+      - name: Run project tests
+        shell: zsh
+        run: |
+          set -euo pipefail
+          ./scripts/run_tests.sh
+      - name: Build native benchmark workloads
+        shell: zsh
+        run: |
+          set -euo pipefail
+          ./scripts/build_native.sh
+      - name: Build and sign SwiftUI app bundle
+        shell: zsh
+        run: |
+          set -euo pipefail
+          ./scripts/build_swiftui_app.sh
       - name: Verify versioned app bundle
         shell: zsh
         run: |
@@ -56,7 +76,6 @@ jobs:
           export STARTED_AT
           python3 - <<'PY'
           import datetime as dt
-          import gzip
           import json
           import os
           import struct
