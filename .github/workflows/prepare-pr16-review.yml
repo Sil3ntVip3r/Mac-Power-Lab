@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 concurrency:
   group: prepare-pr16-review
@@ -22,6 +23,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - name: Report start
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment 16 --repo "$GITHUB_REPOSITORY" --body "Trusted PR #16 preparation started for reviewed head 428d04c5065c07186ab4482259ca1d6833d21c9f."
       - uses: actions/checkout@v4
         with:
           ref: 428d04c5065c07186ab4482259ca1d6833d21c9f
@@ -86,3 +91,8 @@ scripts/_prepare_legacy_once.py'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'fix: complete legacy one-shot logging'
           git push origin HEAD:fix/legacy-once-logging
+      - name: Report completion
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment 16 --repo "$GITHUB_REPOSITORY" --body "Trusted PR #16 preparation completed with status: ${{ job.status }}."
