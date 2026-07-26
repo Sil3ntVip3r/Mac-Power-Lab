@@ -16,32 +16,32 @@ jobs:
         with:
           show-progress: false
       - name: Prepare executable permissions
-        shell: zsh
+        shell: /bin/zsh {0}
         run: |
           set -euo pipefail
           chmod +x *.sh scripts/*.sh
       - name: Build Go backend
-        shell: zsh
+        shell: /bin/zsh {0}
         run: |
           set -euo pipefail
           ./scripts/build_macos.sh
       - name: Run project tests
-        shell: zsh
+        shell: /bin/zsh {0}
         run: |
           set -euo pipefail
           ./scripts/run_tests.sh
       - name: Build native benchmark workloads
-        shell: zsh
+        shell: /bin/zsh {0}
         run: |
           set -euo pipefail
           ./scripts/build_native.sh
       - name: Build and sign SwiftUI app bundle
-        shell: zsh
+        shell: /bin/zsh {0}
         run: |
           set -euo pipefail
           ./scripts/build_swiftui_app.sh
       - name: Verify versioned app bundle
-        shell: zsh
+        shell: /bin/zsh {0}
         run: |
           set -euo pipefail
           ./bin/macpowerlab version | tee /tmp/macpowerlab-version.txt
@@ -50,13 +50,13 @@ jobs:
           test "$(plutil -extract CFBundleVersion raw dist/MacPowerLab.app/Contents/Info.plist)" = '150'
           codesign --verify --deep --strict --verbose=2 dist/MacPowerLab.app
       - name: Run native workloads
-        shell: zsh
+        shell: /bin/zsh {0}
         run: |
           set -euo pipefail
           ./bin/native/cpu_stress 2
           ./bin/native/memory_stress 2 64
       - name: Run representative benchmark and inspect archive
-        shell: zsh
+        shell: /bin/zsh {0}
         run: |
           set -euo pipefail
           sudo -n -v
