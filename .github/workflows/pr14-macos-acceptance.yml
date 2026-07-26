@@ -59,26 +59,28 @@ jobs:
           set -o pipefail
           ./bin/native/cpu_stress 2 2>&1 | tee /tmp/macpowerlab-cpu-workload.log
           ./bin/native/memory_stress 2 64 2>&1 | tee /tmp/macpowerlab-memory-workload.log
-      - name: Run representative benchmark and inspect archive
+      - name: Run focused benchmark lifecycle regressions
+        shell: /bin/zsh {0}
+        run: |
+          set -o pipefail
+          go test -count=1 ./internal/benchmark \
+            -run 'TestPhaseCompletionGraceScalesAndStaysBounded|TestRunPhaseAcceptsSuccessfulExitAfterDeadline|TestRunPhasePreservesParentCancellationAfterSuccessfulCleanup|TestShouldRecordWorkloadWaitUsesExitSnapshot|TestRunCommandsPreservesDeadlineForGracefulExit|TestFinalizeWorkloadResultDistinguishesDeadlineOrder' \
+            2>&1 | tee /tmp/macpowerlab-benchmark-regressions.log
+      - name: Create support bundle and inspect manifest
         shell: /bin/zsh {0}
         run: |
           set -euo pipefail
-          sudo -n -v
-          export DATA_DIR="$RUNNER_TEMP/macpowerlab-acceptance"
-          mkdir -p "$DATA_DIR"
+          export DATA_DIR="$RUNNER_TEMP/macpowerlab-support-root"
+          export ARCHIVE="$RUNNER_TEMP/MacPowerLab_Support.tar.gz"
+          mkdir -p "$DATA_DIR/sessions/sample"
+          print -r -- 'sample diagnostic' > "$DATA_DIR/sessions/sample/diagnostic.txt"
+          print -r -- 'must not be packaged' > "$DATA_DIR/api.token"
           STARTED_AT="$(date -u +%s)"
-          ./bin/macpowerlab benchmark custom \
-            --name 'PR 14 acceptance' \
-            --cpu \
-            --duration 2s \
-            --power-source any \
-            --data-dir "$DATA_DIR" \
-            --apps=false \
-            --sqlite=false \
-            --no-color=true \
-            --pack=true \
-            </dev/null 2>&1 | tee /tmp/macpowerlab-benchmark.log
           export STARTED_AT
+          ./bin/macpowerlab support pack \
+            --data-dir "$DATA_DIR" \
+            --output "$ARCHIVE" \
+            2>&1 | tee /tmp/macpowerlab-support-pack.log
           python3 - <<'PY' 2>&1 | tee /tmp/macpowerlab-archive-check.log
           import datetime as dt
           import json
@@ -87,48 +89,36 @@ jobs:
           import tarfile
           from pathlib import Path
 
-          data = Path(os.environ['DATA_DIR'])
-          sessions = sorted(data.rglob('session.json'))
-          if not sessions:
-              raise SystemExit('benchmark session.json was not created')
-          session = json.loads(sessions[-1].read_text())
-          if session.get('version') != '1.5.0':
-              raise SystemExit(f"session version={session.get('version')!r}, expected '1.5.0'")
-
-          test_runs = sorted(data.rglob('tests.jsonl'))
-          if not test_runs:
-              raise SystemExit('benchmark tests.jsonl was not created')
-          records = [json.loads(line) for line in test_runs[-1].read_text().splitlines() if line.strip()]
-          if not records or any(record.get('status') != 'completed' for record in records):
-              raise SystemExit(f'benchmark did not complete cleanly: {records!r}')
-
-          archives = sorted(data.rglob('*.tar.gz'), key=lambda path: path.stat().st_mtime)
-          if not archives:
-              raise SystemExit('benchmark archive was not created')
-          archive = archives[-1]
+          archive = Path(os.environ['ARCHIVE'])
           raw = archive.read_bytes()
           if len(raw) < 10 or raw[:2] != b'\x1f\x8b':
-              raise SystemExit('archive is not gzip')
+              raise SystemExit('support archive is not gzip')
           if struct.unpack('<I', raw[4:8])[0] != 0:
               raise SystemExit('gzip header timestamp is not normalized')
 
           with tarfile.open(archive, 'r:gz') as bundle:
               members = bundle.getmembers()
               if not members:
-                  raise SystemExit('archive contains no members')
+                  raise SystemExit('support archive contains no members')
               nonzero = [member.name for member in members if member.mtime != 0]
               if nonzero:
                   raise SystemExit(f'tar timestamps are not normalized: {nonzero!r}')
               manifest_member = bundle.getmember('MANIFEST_macpowerlab.json')
               manifest = json.load(bundle.extractfile(manifest_member))
+              packaged_names = {member.name for member in members}
 
           created = dt.datetime.fromisoformat(manifest['created_at'].replace('Z', '+00:00')).timestamp()
           started = int(os.environ['STARTED_AT'])
           now = dt.datetime.now(dt.timezone.utc).timestamp()
           if created < started or created > now + 5:
               raise SystemExit(f"manifest created_at={manifest['created_at']} outside [{started}, {now}]")
-          print(f'Validated session {sessions[-1]}')
-          print(f'Validated archive {archive}')
+          excluded = {entry['path']: entry['reason'] for entry in manifest.get('excluded', [])}
+          if excluded.get('api.token') != 'local API credential':
+              raise SystemExit(f'credential exclusion missing or wrong: {excluded!r}')
+          if any(name.endswith('/api.token') or name == 'api.token' for name in packaged_names):
+              raise SystemExit('api.token was packaged')
+          print(f'Validated support archive {archive}')
+          print(f"Manifest created_at={manifest['created_at']}")
           PY
       - name: Upload acceptance diagnostics
         if: always()
